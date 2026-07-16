@@ -66,6 +66,20 @@ def preprocess_page_image(
     return crop_to_content(working, gray, options)
 
 
+def bgr_to_jpeg_bytes(image: np.ndarray, *, quality: int = 85) -> bytes:
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("Expected a BGR color image")
+    quality = int(max(30, min(95, quality)))
+    ok, buf = cv2.imencode(
+        ".jpg",
+        image,
+        [int(cv2.IMWRITE_JPEG_QUALITY), quality],
+    )
+    if not ok:
+        raise ValueError("Failed to encode JPEG")
+    return bytes(buf)
+
+
 def _card_deskew_options(options: PreprocessOptions) -> PreprocessOptions:
     return PreprocessOptions(
         dpi=options.dpi,

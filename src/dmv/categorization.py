@@ -10,6 +10,9 @@ from dmv.classification_normalize import is_blank_page_document, normalize_class
 from dmv.classification_recovery import recover_misclassified_empty_pages
 from dmv.config import Settings
 from dmv.cost import estimate_cost
+from dmv.consolidation.service import ConsolidationResult, consolidate_extractions
+from dmv.debug_exclusions import ExcludedDocument, identify_debug_exclusions
+from dmv.extraction.service import ExtractionResult, ExtractionService
 from dmv.models.classification import ClassificationResult
 from dmv.models.usage import ProcessingStats, TokenUsage
 from dmv.pdf_splitter import artifact_paths, get_pdf_page_count, write_artifacts
@@ -31,8 +34,12 @@ class FileProcessingResult:
     artifact_dir: Path
     classified_dir: Path
     corrected_dir: Path
+    extracted_dir: Path
     stats: ProcessingStats
     preprocessing: PreprocessingResult
+    extraction: ExtractionResult
+    consolidation: ConsolidationResult
+    excluded_documents: list[ExcludedDocument]
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,7 @@ class RunSummary:
         usage = TokenUsage.empty()
         for result in self.results:
             usage = usage.merge(result.stats.usage)
+            usage = usage.merge(result.extraction.stats.usage)
         return usage
 
 
@@ -54,12 +62,14 @@ class CategorizationService:
         settings: Settings,
         provider: ClassificationProvider | None = None,
         preprocessing_service: PreprocessingService | None = None,
+        extraction_service: ExtractionService | None = None,
     ) -> None:
         self._settings = settings
         self._provider = provider or create_classification_provider(settings)
         self._preprocessing_service = preprocessing_service or PreprocessingService(
             settings
         )
+        self._extraction_service = extraction_service or ExtractionService(settings)
 
     async def process_files(self, pdf_paths: list[Path]) -> RunSummary:
         started_at = time.perf_counter()
@@ -109,12 +119,24 @@ class CategorizationService:
             classification,
             self._settings.artifacts_dir,
         )
-        classified_dir, corrected_dir = artifact_paths(artifact_dir)
+        classified_dir, corrected_dir, extracted_dir = artifact_paths(artifact_dir)
         preprocessing = await self._preprocessing_service.preprocess_directory(
             classified_dir,
             corrected_dir,
             classification=classification,
         )
+        excluded_documents = (
+            identify_debug_exclusions(classification)
+            if self._settings.debug_mode
+            else []
+        )
+        extraction = await self._extraction_service.extract_directory(
+            corrected_dir,
+            extracted_dir,
+            classification=classification,
+            debug_mode=self._settings.debug_mode,
+        )
+        consolidation = consolidate_extractions(extracted_dir, artifact_dir)
         stats = ProcessingStats(
             elapsed_seconds=elapsed_seconds,
             usage=outcome.usage,
@@ -128,6 +150,10 @@ class CategorizationService:
             artifact_dir=artifact_dir,
             classified_dir=classified_dir,
             corrected_dir=corrected_dir,
+            extracted_dir=extracted_dir,
             stats=stats,
             preprocessing=preprocessing,
+            extraction=extraction,
+            consolidation=consolidation,
+            excluded_documents=excluded_documents,
         )

@@ -116,5 +116,9 @@ def write_artifacts(
     return artifact_dir
 
 
-def artifact_paths(artifact_dir: Path) -> tuple[Path, Path]:
-    return artifact_dir / "classified", artifact_dir / "corrected"
+def artifact_paths(artifact_dir: Path) -> tuple[Path, Path, Path]:
+    return (
+        artifact_dir / "classified",
+        artifact_dir / "corrected",
+        artifact_dir / "extracted",
+    )

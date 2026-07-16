@@ -14,6 +14,11 @@ def _optional_float(name: str) -> float | None:
     return float(raw)
 
 
+def _debug_mode() -> bool:
+    raw = os.getenv("DEBUG_MODE", "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     ai_provider: str
@@ -27,6 +32,7 @@ class Settings:
     openai_output_price_per_million: float | None
     openai_cached_input_price_per_million: float | None
     preprocess_dpi: int
+    debug_mode: bool
 
 
 def _preprocess_dpi() -> int:
@@ -58,4 +64,5 @@ def load_settings(env_path: Path | None = None) -> Settings:
             "OPENAI_CACHED_INPUT_PRICE_PER_MILLION"
         ),
         preprocess_dpi=_preprocess_dpi(),
+        debug_mode=_debug_mode(),
     )

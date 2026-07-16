@@ -22,6 +22,10 @@ def test_preprocess_pdf_file_writes_output(skewed_content_pdf: Path, tmp_path: P
         page = doc[0]
         assert page.rect.width == pytest.approx(8.5 * 72, rel=0.05)
         assert page.rect.height == pytest.approx(11.0 * 72, rel=0.05)
+        images = page.get_images(full=True)
+        assert images
+        extracted = doc.extract_image(images[0][0])
+        assert extracted["ext"] in {"jpeg", "jpg"}
 
 
 def test_preprocess_pdf_file_copies_unchanged_pages(tmp_path: Path) -> None:

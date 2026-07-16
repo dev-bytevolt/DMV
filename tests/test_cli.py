@@ -5,7 +5,10 @@ import pytest
 from dmv.categorization import FileProcessingResult, RunSummary
 from dmv.cli import main, print_results
 from dmv.config import Settings
+from dmv.consolidation.service import ConsolidationResult, CONSOLIDATED_DATA_FILENAME
 from dmv.cost import estimate_cost
+from dmv.debug_exclusions import ExcludedDocument
+from dmv.extraction.service import ExtractionResult, ExtractionStats
 from dmv.models.classification import ClassificationResult
 from dmv.models.usage import ProcessingStats, TokenUsage
 from dmv.preprocess.service import PreprocessingResult, PreprocessingStats
@@ -32,6 +35,31 @@ def cli_settings() -> Settings:
         openai_output_price_per_million=None,
         openai_cached_input_price_per_million=None,
         preprocess_dpi=200,
+        debug_mode=False,
+    )
+
+
+def _empty_consolidation(tmp_path: Path) -> ConsolidationResult:
+    artifact_dir = tmp_path / "artifacts" / "sample"
+    output_json = artifact_dir / CONSOLIDATED_DATA_FILENAME
+    return ConsolidationResult(
+        artifact_dir=artifact_dir,
+        output_json=output_json,
+        field_count=0,
+        extra_document_count=0,
+    )
+
+
+def _empty_extraction(tmp_path: Path) -> ExtractionResult:
+    artifact_dir = tmp_path / "artifacts" / "sample"
+    return ExtractionResult(
+        extracted_dir=artifact_dir / "extracted",
+        outputs=[],
+        stats=ExtractionStats(
+            elapsed_seconds=0.0,
+            documents_processed=0,
+            usage=TokenUsage.empty(),
+        ),
     )
 
 
@@ -78,6 +106,7 @@ def _make_result(
         openai_output_price_per_million=None,
         openai_cached_input_price_per_million=None,
         preprocess_dpi=200,
+        debug_mode=False,
     )
     artifact_dir = tmp_path / "artifacts" / "sample"
     return FileProcessingResult(
@@ -87,12 +116,16 @@ def _make_result(
         artifact_dir=artifact_dir,
         classified_dir=artifact_dir / "classified",
         corrected_dir=artifact_dir / "corrected",
+        extracted_dir=artifact_dir / "extracted",
         stats=ProcessingStats(
             elapsed_seconds=elapsed_seconds,
             usage=token_usage,
             cost=estimate_cost(token_usage, settings),
         ),
         preprocessing=_empty_preprocessing(tmp_path),
+        extraction=_empty_extraction(tmp_path),
+        consolidation=_empty_consolidation(tmp_path),
+        excluded_documents=[],
     )
 
 
@@ -115,11 +148,153 @@ def test_print_results_reports_complete_coverage(
     assert "Driver License Copy" in output
     assert "All pages are uniquely covered." in output
     assert "Document contiguity: all documents have valid page grouping." in output
+    assert "Preprocessing:" in output
+    assert "Extraction:" in output
     assert "Statistics:" in output
     assert "Processing time: 1.5s" in output
     assert "OpenAI tokens:" in output
     assert "Estimated cost:" in output
-    assert "Preprocessing:" in output
+    preprocessing_pos = output.index("Preprocessing:")
+    extraction_pos = output.index("Extraction:")
+    stats_pos = output.index("Statistics:")
+    assert preprocessing_pos < extraction_pos < stats_pos
+
+
+def test_print_results_reports_total_stats_after_all_steps(
+    sample_pdf: Path,
+    sample_classification,
+    tmp_path: Path,
+    capsys,
+    cli_settings: Settings,
+) -> None:
+    preprocessing = PreprocessingResult(
+        corrected_dir=tmp_path / "artifacts" / "sample" / "corrected",
+        outputs=[],
+        stats=PreprocessingStats(
+            elapsed_seconds=2.0,
+            documents_processed=2,
+            pages_processed=3,
+        ),
+    )
+    extraction = ExtractionResult(
+        extracted_dir=tmp_path / "artifacts" / "sample" / "extracted",
+        outputs=[],
+        stats=ExtractionStats(
+            elapsed_seconds=3.0,
+            documents_processed=2,
+            usage=TokenUsage(
+                input_tokens=5000,
+                output_tokens=50,
+                total_tokens=5050,
+                model="gpt-4o",
+            ),
+        ),
+    )
+    result = _make_result(
+        sample_pdf,
+        sample_classification,
+        tmp_path,
+        elapsed_seconds=1.0,
+        usage=TokenUsage(
+            input_tokens=1000,
+            output_tokens=200,
+            total_tokens=1200,
+            model="gpt-4o",
+        ),
+    )
+    result = FileProcessingResult(
+        source_pdf=result.source_pdf,
+        classification=result.classification,
+        validation=result.validation,
+        artifact_dir=result.artifact_dir,
+        classified_dir=result.classified_dir,
+        corrected_dir=result.corrected_dir,
+        extracted_dir=result.extracted_dir,
+        stats=result.stats,
+        preprocessing=preprocessing,
+        extraction=extraction,
+        consolidation=_empty_consolidation(tmp_path),
+        excluded_documents=[],
+    )
+    summary = RunSummary(results=[result], total_elapsed_seconds=6.0)
+
+    print_results(summary, cli_settings)
+    output = capsys.readouterr().out
+
+    assert "Processing time: 6.0s" in output
+    assert "6,000 input" in output
+    assert "250 output" in output
+    assert "6,250 total" in output
+
+
+def test_print_results_reports_debug_exclusions(
+    sample_pdf: Path,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    classification = {
+        "documents": [
+            {
+                "id": "doc-001",
+                "name": "MV Express Cover Letter to NJ DMV",
+                "type": "cover_letter",
+                "pages": [1],
+            },
+            {
+                "id": "doc-002",
+                "name": "Driver License Copy",
+                "type": "driver_license",
+                "pages": [2],
+            },
+        ],
+        "empty_pages": [],
+    }
+    result = _make_result(sample_pdf, classification, tmp_path)
+    result = FileProcessingResult(
+        source_pdf=result.source_pdf,
+        classification=result.classification,
+        validation=result.validation,
+        artifact_dir=result.artifact_dir,
+        classified_dir=result.classified_dir,
+        corrected_dir=result.corrected_dir,
+        extracted_dir=result.extracted_dir,
+        stats=result.stats,
+        preprocessing=result.preprocessing,
+        extraction=result.extraction,
+        consolidation=result.consolidation,
+        excluded_documents=[
+            ExcludedDocument(
+                id="doc-001",
+                name="MV Express Cover Letter to NJ DMV",
+                type="cover_letter",
+                pages=[1],
+                reason="test fixture — MV Express Cover Letter to NJ DMV is pipeline output, not real input",
+            )
+        ],
+    )
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-key",
+        openai_model="gpt-4o",
+        worker_pool_size=1,
+        max_ai_retries=1,
+        ai_retry_base_delay_seconds=0.01,
+        artifacts_dir=tmp_path / "artifacts",
+        openai_input_price_per_million=None,
+        openai_output_price_per_million=None,
+        openai_cached_input_price_per_million=None,
+        preprocess_dpi=200,
+        debug_mode=True,
+    )
+    summary = RunSummary(results=[result], total_elapsed_seconds=1.0)
+
+    print_results(summary, settings)
+    output = capsys.readouterr().out
+
+    assert "Debug exclusions (1):" in output
+    assert "excluded from further processing" in output
+    assert "MV Express Cover Letter to NJ DMV" in output
+    assert "test fixture —" in output
 
 
 def test_print_results_returns_error_for_incomplete_coverage(
@@ -208,7 +383,8 @@ def test_cli_main_integration(monkeypatch, sample_pdf: Path, tmp_path: Path) -> 
         from dmv.cli import print_results
         from dmv.config import Settings
         from dmv.models.classification import ClassificationResult
-        from tests.fakes import FakeProvider
+        from dmv.extraction.service import ExtractionService
+        from tests.fakes import FakeExtractionProvider, FakeProvider
 
         settings = Settings(
             ai_provider="openai",
@@ -222,6 +398,7 @@ def test_cli_main_integration(monkeypatch, sample_pdf: Path, tmp_path: Path) -> 
             openai_output_price_per_million=None,
             openai_cached_input_price_per_million=None,
             preprocess_dpi=200,
+            debug_mode=False,
         )
         service = CategorizationService(
             settings,
@@ -240,6 +417,10 @@ def test_cli_main_integration(monkeypatch, sample_pdf: Path, tmp_path: Path) -> 
                     }
                 )
             ),
+            extraction_service=ExtractionService(
+                settings,
+                provider=FakeExtractionProvider(),
+            ),
         )
         summary = await service.process_files(pdf_files)
         return print_results(summary, settings)
@@ -252,3 +433,4 @@ def test_cli_main_integration(monkeypatch, sample_pdf: Path, tmp_path: Path) -> 
     assert (tmp_path / "artifacts" / "sample" / "original.pdf").exists()
     assert (tmp_path / "artifacts" / "sample" / "classified").exists()
     assert (tmp_path / "artifacts" / "sample" / "corrected").exists()
+    assert (tmp_path / "artifacts" / "sample" / "extracted").exists()

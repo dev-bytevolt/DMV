@@ -9,6 +9,8 @@ from pathlib import Path
 from dmv.categorization import CategorizationService, FileProcessingResult, RunSummary
 from dmv.config import Settings, load_settings
 from dmv.cost import estimate_cost
+from dmv.debug_exclusions import ExcludedDocument
+from dmv.extraction.service import ExtractionResult, ExtractionStats
 from dmv.logging_config import configure_logging, format_error
 from dmv.models.usage import ProcessingStats, TokenUsage
 from dmv.preprocess.service import PreprocessingResult, PreprocessingStats
@@ -50,6 +52,8 @@ def print_results(summary: RunSummary, settings: Settings) -> int:
         print(f"Artifacts: {result.artifact_dir}")
         print(f"Classified: {result.classified_dir}")
         print(f"Corrected: {result.corrected_dir}")
+        print(f"Extracted: {result.extracted_dir}")
+        print(f"Consolidated: {result.consolidation.output_json}")
 
         if not result.classification.documents:
             print("Documents found: none")
@@ -68,8 +72,10 @@ def print_results(summary: RunSummary, settings: Settings) -> int:
 
         print_coverage_report(result.validation.coverage)
         print_contiguity_report(result.validation.contiguity)
-        print_processing_stats(result.stats, settings)
+        print_debug_exclusions(result.excluded_documents)
         print_preprocessing_stats(result.preprocessing)
+        print_extraction_stats(result.extraction)
+        print_processing_stats(_file_total_stats(result, settings), settings)
         if not result.validation.is_valid:
             exit_code = 1
 
@@ -121,6 +127,22 @@ def print_contiguity_report(contiguity: DocumentContiguityReport) -> None:
         )
 
 
+def print_debug_exclusions(excluded_documents: list[ExcludedDocument]) -> None:
+    if not excluded_documents:
+        return
+
+    print(
+        f"Debug exclusions ({len(excluded_documents)}): "
+        "classified and preprocessed, excluded from further processing"
+    )
+    for item in excluded_documents:
+        pages = ", ".join(str(page) for page in item.pages)
+        print(
+            f"  - [{item.id}] {item.name} "
+            f"(type={item.type}, pages={pages}): {item.reason}"
+        )
+
+
 def print_preprocessing_stats(preprocessing: PreprocessingResult, *, prefix: str = "") -> None:
     stats = preprocessing.stats
     print(f"{prefix}Preprocessing:")
@@ -129,6 +151,20 @@ def print_preprocessing_stats(preprocessing: PreprocessingResult, *, prefix: str
         f"{prefix}  Documents: {stats.documents_processed}, "
         f"pages: {stats.pages_processed}"
     )
+
+
+def print_extraction_stats(extraction: ExtractionResult, *, prefix: str = "") -> None:
+    stats = extraction.stats
+    print(f"{prefix}Extraction:")
+    print(f"{prefix}  Time: {stats.elapsed_seconds:.1f}s")
+    print(f"{prefix}  Documents: {stats.documents_processed}")
+    if extraction.outputs:
+        print(f"{prefix}  JSON files:")
+        for output in extraction.outputs:
+            print(
+                f"{prefix}    - {output.output_json.name} "
+                f"(type={output.document_type})"
+            )
 
 
 def print_processing_stats(
@@ -141,6 +177,23 @@ def print_processing_stats(
     print(f"{prefix}  Processing time: {stats.elapsed_seconds:.1f}s")
     print(f"{prefix}  OpenAI tokens: {_format_token_usage(stats.usage)}")
     print(f"{prefix}  Estimated cost: {_format_cost(stats, settings)}")
+
+
+def _file_total_stats(
+    result: FileProcessingResult,
+    settings: Settings,
+) -> ProcessingStats:
+    usage = result.stats.usage.merge(result.extraction.stats.usage)
+    elapsed_seconds = (
+        result.stats.elapsed_seconds
+        + result.preprocessing.stats.elapsed_seconds
+        + result.extraction.stats.elapsed_seconds
+    )
+    return ProcessingStats(
+        elapsed_seconds=elapsed_seconds,
+        usage=usage,
+        cost=estimate_cost(usage, settings),
+    )
 
 
 def _format_token_usage(usage: TokenUsage) -> str:

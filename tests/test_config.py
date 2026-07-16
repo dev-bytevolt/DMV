@@ -33,6 +33,7 @@ def test_load_settings_from_env(monkeypatch, tmp_path: Path) -> None:
         openai_output_price_per_million=None,
         openai_cached_input_price_per_million=None,
         preprocess_dpi=200,
+        debug_mode=False,
     )
 
 
@@ -64,9 +65,16 @@ def test_load_settings_defaults(monkeypatch, tmp_path: Path) -> None:
     assert settings.ai_retry_base_delay_seconds == 1.0
     assert settings.artifacts_dir == Path("artifacts")
     assert settings.preprocess_dpi == 200
+    assert settings.debug_mode is False
 
 
-def test_preprocess_dpi_is_clamped(tmp_path: Path) -> None:
+def test_load_settings_debug_mode(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEBUG_MODE=true\n")
+
+    settings = load_settings(env_file)
+
+    assert settings.debug_mode is True
     env_file = tmp_path / ".env"
     env_file.write_text("PREPROCESS_DPI=400\n")
 

@@ -6,8 +6,9 @@ import pytest
 
 from dmv.categorization import CategorizationService
 from dmv.config import Settings
+from dmv.extraction.service import ExtractionService
 from dmv.models.classification import ClassificationResult
-from tests.fakes import FakeProvider
+from tests.fakes import FakeExtractionProvider, FakeProvider
 
 
 @pytest.mark.asyncio
@@ -17,7 +18,15 @@ async def test_categorization_service_processes_file(
     sample_classification,
 ) -> None:
     provider = FakeProvider(ClassificationResult.from_dict(sample_classification))
-    service = CategorizationService(settings, provider=provider)
+    extraction_service = ExtractionService(
+        settings,
+        provider=FakeExtractionProvider(),
+    )
+    service = CategorizationService(
+        settings,
+        provider=provider,
+        extraction_service=extraction_service,
+    )
 
     summary = await service.process_files([sample_pdf])
 
@@ -31,6 +40,9 @@ async def test_categorization_service_processes_file(
     assert (result.artifact_dir / "doc_classification.json").exists()
     assert (result.classified_dir / "Driver_License_Copy.pdf").exists()
     assert (result.corrected_dir / "Driver_License_Copy.pdf").exists()
+    assert result.extraction.stats.documents_processed == 2
+    assert (result.extracted_dir / "Driver_License_Copy.json").exists()
+    assert (result.consolidation.output_json).exists()
     assert result.preprocessing.stats.documents_processed == 2
 
 
@@ -45,12 +57,20 @@ async def test_categorization_service_processes_multiple_files_in_parallel(
     second_pdf.write_bytes(sample_pdf.read_bytes())
 
     provider = FakeProvider(ClassificationResult.from_dict(sample_classification))
-    service = CategorizationService(settings, provider=provider)
+    extraction_service = ExtractionService(
+        settings,
+        provider=FakeExtractionProvider(),
+    )
+    service = CategorizationService(
+        settings,
+        provider=provider,
+        extraction_service=extraction_service,
+    )
 
     summary = await service.process_files([sample_pdf, second_pdf])
 
     assert len(summary.results) == 2
-    assert summary.total_usage.total_tokens == 2400
+    assert summary.total_usage.total_tokens == 4800
     assert provider.calls == [sample_pdf, second_pdf]
 
 

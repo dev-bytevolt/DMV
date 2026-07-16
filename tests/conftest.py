@@ -71,4 +71,5 @@ def settings(tmp_path: Path) -> Settings:
         openai_output_price_per_million=None,
         openai_cached_input_price_per_million=None,
         preprocess_dpi=200,
+        debug_mode=False,
     )

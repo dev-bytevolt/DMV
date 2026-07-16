@@ -18,6 +18,7 @@ def test_resolve_model_pricing_for_gpt_54_snapshot() -> None:
         openai_output_price_per_million=None,
         openai_cached_input_price_per_million=None,
         preprocess_dpi=200,
+        debug_mode=False,
     )
 
     pricing, source = resolve_model_pricing("gpt-5.4-2026-03-05", settings)
@@ -41,6 +42,7 @@ def test_estimate_cost_uses_cached_input_rate() -> None:
         openai_output_price_per_million=None,
         openai_cached_input_price_per_million=None,
         preprocess_dpi=200,
+        debug_mode=False,
     )
     usage = TokenUsage(
         input_tokens=200_000,
@@ -70,6 +72,7 @@ def test_estimate_cost_respects_env_override() -> None:
         openai_output_price_per_million=2.0,
         openai_cached_input_price_per_million=None,
         preprocess_dpi=200,
+        debug_mode=False,
     )
     usage = TokenUsage(
         input_tokens=1_000_000,

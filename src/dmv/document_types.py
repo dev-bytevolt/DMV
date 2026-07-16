@@ -116,10 +116,19 @@ def build_classification_prompt() -> str:
         "Page grouping rules:",
         "- The PDF pages are in sequential scan order. Pages from different documents "
         "never interleave with each other.",
-        "- If two instances of the same document type appear with other documents' pages "
+        "- HIGHEST PRIORITY — do not merge across intervening documents: If two "
+        "instances of the same document type appear with other documents' pages "
         "in between, they are separate documents. Example: Limited Power of Attorney "
         "on page 15 and another Limited Power of Attorney on page 25, with other forms "
         "on pages 16-24, must be two document entries (not one).",
+        "- Do not split one physical document into multiple entries. Front and back "
+        "(or other related sides/pages) of the same item belong in one document. "
+        "Example: a driver license front on page 11 and back on page 13, with only "
+        "blank/separator page 12 between them, is ONE driver_license document with "
+        "pages [11, 13] — not two separate documents. The same applies to insurance "
+        "cards and similar multi-side scans. This rule yields to the interleaving "
+        "rule above: never combine pages into one document if a different document "
+        "appears between them.",
         "- A single multi-page document may have blank or separator pages between its "
         "content pages. Put those blank pages in empty_pages, not in the document's "
         "pages list. Example: a lease agreement whose content is on pages 27, 29, 31, "

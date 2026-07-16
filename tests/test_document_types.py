@@ -19,7 +19,11 @@ def test_classification_prompt_describes_page_grouping_rules() -> None:
     assert "empty_pages" in prompt
     assert "separate documents" in prompt
     assert "blank and separator pages are NOT documents" in prompt
-
+    assert "Do not split one physical document into multiple entries" in prompt
+    assert "HIGHEST PRIORITY" in prompt
+    assert prompt.index("HIGHEST PRIORITY") < prompt.index(
+        "Do not split one physical document into multiple entries"
+    )
 
 def test_classification_schema_matches_document_types() -> None:
     doc_schema = CLASSIFICATION_JSON_SCHEMA["properties"]["documents"]["items"]

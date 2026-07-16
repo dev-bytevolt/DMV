@@ -12,7 +12,7 @@ import numpy as np
 from dmv.page_content import is_blank_scanned_page
 from dmv.preprocess.image_ops import (
     PreprocessOptions,
-    bgr_to_png_bytes,
+    bgr_to_jpeg_bytes,
     pixmap_to_bgr,
     preprocess_page_image,
 )
@@ -143,7 +143,9 @@ def _write_preprocessed_pages(
             width=page_width,
             height=page_height,
         )
-        new_page.insert_image(page_rect, stream=bgr_to_png_bytes(processed))
+        # PNG encoding makes corrected PDFs very large for scanned pages.
+        # JPEG is dramatically smaller while preserving sufficient OCR fidelity.
+        new_page.insert_image(page_rect, stream=bgr_to_jpeg_bytes(processed, quality=85))
 
     return len(output_doc)
 
