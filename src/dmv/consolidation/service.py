@@ -92,22 +92,8 @@ def consolidate_extractions(
         if not hypotheses:
             continue
 
-        if field.startswith("owner_"):
-            # "Owner" fields should not be consolidated from lease/insurance/driver-license
-            # sources where extraction may accidentally map a different person/entity.
-            trusted_doc_types = {"retail_certificate_of_sale", "dealer_invoice"}
-            trusted = [
-                (v, c, dn, dt)
-                for (v, c, dn, dt) in hypotheses
-                if dt in trusted_doc_types
-            ]
-            use = trusted or hypotheses
-            field_hypotheses_for_vote = use
-        else:
-            field_hypotheses_for_vote = hypotheses
-
         consolidated_field = consolidate_field(
-            field_hypotheses_for_vote,
+            hypotheses,
             use_vin=field == "vehicle_vin",
         )
         if consolidated_field is not None:

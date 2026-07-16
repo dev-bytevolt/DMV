@@ -10,6 +10,7 @@ from dmv.extraction.fields import CANONICAL_EXTRACTION_FIELDS
 from dmv.extraction.schemas import (
     EXTRACTION_JSON_SCHEMA,
     FIELD_VALUE_SCHEMA,
+    build_extraction_json_schema,
     normalize_extraction_payload,
 )
 from dmv.extraction.service import EXTRACTION_UPLOAD_MAX_BYTES, ExtractionService
@@ -54,6 +55,10 @@ def test_extraction_json_schema_includes_canonical_fields() -> None:
         assert field not in required
     assert "extra" not in required
     assert EXTRACTION_JSON_SCHEMA["properties"]["vehicle_vin"] == FIELD_VALUE_SCHEMA
+    assert build_extraction_json_schema("other") == EXTRACTION_JSON_SCHEMA
+    lease_schema = build_extraction_json_schema("lease_agreement")
+    assert "lessee_name" in lease_schema["properties"]
+    assert "owner_full_name" not in lease_schema["properties"]
 
 
 def test_normalize_extraction_payload_drops_empty_fields() -> None:

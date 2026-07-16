@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from dmv.consolidation.field import (
+    FieldVariant,
     consolidate_field,
     compute_field_confidence,
     collect_variants,
@@ -110,13 +111,33 @@ def test_collect_source_variants_keeps_document_metadata() -> None:
 
 
 def test_compute_field_confidence_penalizes_disagreement() -> None:
-    unanimous = collect_variants([("GENESIS", 0.99), ("GENESIS", 0.95)])
-    conflicting = collect_variants([("GENESIS", 0.99), ("HYUNDAI", 0.98)])
+    unanimous = [
+        FieldVariant("GENESIS", 0.99),
+        FieldVariant("GENESIS", 0.95),
+    ]
+    conflicting = [
+        FieldVariant("GENESIS", 0.99),
+        FieldVariant("HYUNDAI", 0.98),
+    ]
 
     unanimous_conf = compute_field_confidence("GENESIS", unanimous)
     conflicting_conf = compute_field_confidence("GENESIS", conflicting)
 
     assert unanimous_conf > conflicting_conf
+
+
+def test_compute_field_confidence_rewards_majority_and_ignores_distant_outliers() -> None:
+    variants = [
+        FieldVariant("5NMMBDTB6TH064502", 0.99, "GEICO", "insurance_card"),
+        FieldVariant("5NMMBDT6TH064502", 0.98, "COO", "manufacturer_certificate"),
+        FieldVariant("5NMED3EB6EH064502", 0.98, "Invoice", "dealer_invoice"),
+        FieldVariant("5NMMBDTB6TH064502", 0.92, "Retail", "retail_certificate_of_sale"),
+        FieldVariant("5NMMBDBTB6TH064502", 0.91, "Lease", "lease_agreement"),
+        FieldVariant("5NMMBDTB6TH064502", 0.74, "POA", "limited_power_of_attorney"),
+    ]
+    confidence = compute_field_confidence("5NMMBDTB6TH064502", variants)
+    assert confidence >= 0.9
+    assert needs_manual_review("5NMMBDTB6TH064502", variants, confidence) is False
 
 
 def test_consolidate_field_includes_metadata() -> None:

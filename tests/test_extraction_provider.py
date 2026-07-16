@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from dmv.extraction.prompt import build_extraction_prompt
-from dmv.extraction.schemas import EXTRACTION_JSON_SCHEMA
+from dmv.extraction.schemas import build_extraction_json_schema
 from dmv.providers.openai_provider import OpenAIExtractionProvider
 from tests.test_openai_provider import FakeAsyncOpenAI, FakeUsage
 
@@ -16,10 +16,10 @@ def test_build_extraction_prompt_lists_canonical_fields() -> None:
     )
     assert "driver_license" in prompt
     assert "driver_first_name" in prompt
-    assert "vehicle_vin" in prompt
     assert "omit them entirely" in prompt
     assert "Never output empty strings" in prompt
     assert "confidence" in prompt
+    assert "owner_full_name" not in prompt
 
 
 @pytest.mark.asyncio
@@ -56,6 +56,7 @@ async def test_openai_extraction_provider_uploads_extracts_and_deletes(
     assert client.files.deleted == ["file-1"]
     assert client.responses.calls
     schema = client.responses.calls[0]["text"]["format"]["schema"]
-    assert schema == EXTRACTION_JSON_SCHEMA
+    assert schema == build_extraction_json_schema("driver_license")
+    assert "owner_full_name" not in schema["properties"]
     assert client.responses.calls[0]["text"]["format"]["strict"] is False
     assert client.responses.calls[0]["text"]["format"]["name"] == "document_extraction"

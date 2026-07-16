@@ -26,6 +26,9 @@ def split_pdf_by_classification(
 ) -> dict[str, Path]:
     reader = PdfReader(str(source_pdf))
     total_pages = len(reader.pages)
+    # Drop leftovers from prior runs (classification names change between packets).
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     written: dict[str, Path] = {}

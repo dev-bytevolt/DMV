@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -46,6 +47,8 @@ class PreprocessingService:
         classification: ClassificationResult | None = None,
     ) -> PreprocessingResult:
         classified_dir.mkdir(parents=True, exist_ok=True)
+        if corrected_dir.exists():
+            shutil.rmtree(corrected_dir)
         corrected_dir.mkdir(parents=True, exist_ok=True)
 
         pdf_files = sorted(classified_dir.glob("*.pdf"))

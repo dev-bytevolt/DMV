@@ -48,7 +48,13 @@ def preprocess_page_image(
         gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
         return crop_to_content(working, gray, options)
 
-    working = deskew_image(image, options)
+    working = image
+    if mode is PreprocessMode.FULL_PAGE_FORM:
+        # Deskew only corrects small angles; landscape forms scanned sideways
+        # need a quarter turn. Keep this out of card/default paths.
+        working = upright_page_if_sideways(working)
+
+    working = deskew_image(working, options)
     gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
 
     if mode is PreprocessMode.FULL_PAGE_FORM:
@@ -94,18 +100,16 @@ def _extract_embedded_card(
     options: PreprocessOptions,
 ) -> np.ndarray | None:
     candidates: list[np.ndarray] = []
-    page_area = gray.shape[0] * gray.shape[1]
 
     raw_card = try_card_extraction(image, gray, options)
     if raw_card is not None:
         candidates.append(raw_card)
 
-    if raw_card is None or not _is_solid_card_extraction(raw_card, page_area, options):
-        deskewed_page = deskew_image(image, options)
-        deskewed_gray = cv2.cvtColor(deskewed_page, cv2.COLOR_BGR2GRAY)
-        deskewed_card = try_card_extraction(deskewed_page, deskewed_gray, options)
-        if deskewed_card is not None:
-            candidates.append(deskewed_card)
+    deskewed_page = deskew_image(image, options)
+    deskewed_gray = cv2.cvtColor(deskewed_page, cv2.COLOR_BGR2GRAY)
+    deskewed_card = try_card_extraction(deskewed_page, deskewed_gray, options)
+    if deskewed_card is not None:
+        candidates.append(deskewed_card)
 
     if not candidates:
         return None
@@ -126,11 +130,14 @@ def _pick_best_embedded_card(
         mean_brightness = float(np.mean(candidate_gray))
         if mean_brightness < 100.0:
             continue
+        # Reject flat scanner-bed / background patches mistaken for cards.
+        if float(np.std(candidate_gray)) < 28.0:
+            continue
 
         deskewed = _upright_card_if_upside_down(
             deskew_image(_normalize_card_orientation(candidate), card_options)
         )
-        deskewed = _tighten_wallet_card_crop(deskewed, options)
+        deskewed = _refine_embedded_card_crop(deskewed, options)
         deskewed_gray = cv2.cvtColor(deskewed, cv2.COLOR_BGR2GRAY)
         if not _is_balanced_card_crop(deskewed_gray):
             continue
@@ -139,9 +146,24 @@ def _pick_best_embedded_card(
         if not options.min_card_aspect_ratio <= aspect_ratio <= options.max_card_aspect_ratio:
             continue
 
+        photo_score = _photo_side_score(deskewed_gray)
+        barcode_score, top_edge, bottom_edge = _card_barcode_edge_score(deskewed_gray)
+        if _strong_barcode_back_signal(deskewed_gray, photo_score):
+            # DL backs: barcodes belong near the top edge.
+            orientation_bonus = barcode_score
+        else:
+            # DL fronts: portrait belongs on the left.
+            orientation_bonus = photo_score
+
+        # Reject near-square / tall crops that are usually scanner-bed leftovers.
+        aspect_penalty = abs(aspect_ratio - 1.58) * 14.0
+        if aspect_ratio < 1.25:
+            aspect_penalty += 8.0
+
         score = (
             -residual_skew * 10.0
-            - abs(aspect_ratio - 1.58)
+            - aspect_penalty
+            + orientation_bonus * 2.0
             + mean_brightness * 0.01
         )
         scored.append((score, deskewed))
@@ -149,18 +171,28 @@ def _pick_best_embedded_card(
     if not scored:
         return None
 
+    # Soft size preference: among similarly oriented cards prefer larger, but never
+    # let a huge misoriented page-crop beat a tighter upright card.
     max_area = max(item[1].shape[0] * item[1].shape[1] for item in scored)
     for score, deskewed in scored:
-        area_ratio = (deskewed.shape[0] * deskewed.shape[1]) / max(max_area, 1)
-        adjusted = score
-        if area_ratio < 0.65:
-            adjusted -= 12.0
+        area = deskewed.shape[0] * deskewed.shape[1]
+        area_ratio = area / max(max_area, 1)
+        adjusted = score + 2.0 * area_ratio
         if adjusted <= best_score:
             continue
         best_score = adjusted
         best_card = deskewed
 
     return best_card
+
+
+def _refine_embedded_card_crop(
+    image: np.ndarray,
+    options: PreprocessOptions,
+) -> np.ndarray:
+    """Tighten a card crop without leaving the embedded-card pipeline."""
+    working = _tighten_wallet_card_crop(image, options)
+    return _trim_embedded_card_margins(working)
 
 
 def deskew_image(image: np.ndarray, options: PreprocessOptions) -> np.ndarray:
@@ -300,6 +332,85 @@ def rotate_image(
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=(255, 255, 255),
     )
+
+
+def _hough_axis_lengths(gray: np.ndarray) -> tuple[float, float]:
+    """Return total Hough line length for near-horizontal and near-vertical lines."""
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blurred, 50, 150, apertureSize=3)
+    min_line_length = max(min(gray.shape[:2]) // 10, 40)
+    lines = cv2.HoughLinesP(
+        edges,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=80,
+        minLineLength=min_line_length,
+        maxLineGap=20,
+    )
+    horizontal = 0.0
+    vertical = 0.0
+    if lines is None:
+        return horizontal, vertical
+
+    for raw_line in lines:
+        coords = np.asarray(raw_line).reshape(-1)
+        if coords.size < 4:
+            continue
+        x1, y1, x2, y2 = coords[:4]
+        angle = abs(float(np.degrees(np.arctan2(y2 - y1, x2 - x1))))
+        angle = min(angle, 180.0 - angle)
+        length = float(np.hypot(x2 - x1, y2 - y1))
+        if angle < 20.0:
+            horizontal += length
+        elif angle > 70.0:
+            vertical += length
+    return horizontal, vertical
+
+
+def page_needs_quarter_turn(gray: np.ndarray) -> bool:
+    """True when page structure is strongly vertical (content likely sideways)."""
+    horizontal, vertical = _hough_axis_lengths(gray)
+    if horizontal + vertical < 1000.0:
+        return False
+    return vertical > horizontal * 1.5
+
+
+def _page_upright_score(image: np.ndarray) -> float:
+    """Higher score means form structure looks upright (not upside-down).
+
+    After a ±90° choice, both candidates have horizontal ruling. Dealer invoices
+    and similar full-page forms typically keep denser tables/settlement columns
+    on the right when upright; top-ink bias is unreliable because fine print and
+    totals at the bottom can outweigh the header.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    horizontal, vertical = _hough_axis_lengths(gray)
+    axis_score = horizontal / (vertical + 1.0)
+
+    ink = gray < 180
+    width = gray.shape[1]
+    left_half = float(np.mean(ink[:, : max(width // 2, 1)]))
+    right_half = float(np.mean(ink[:, width // 2 :]))
+    right_bias = right_half - left_half
+    return axis_score + 20.0 * right_bias
+
+
+def upright_page_if_sideways(image: np.ndarray) -> np.ndarray:
+    """Rotate a page by ±90° when content appears sideways.
+
+    Deskew only handles small angles; scanned landscape forms on portrait pages
+    need a quarter turn before further preprocessing. Only used for full-page
+    form mode — not driver licenses or other embedded-card pages.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if not page_needs_quarter_turn(gray):
+        return image
+
+    candidates = (
+        cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE),
+        cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE),
+    )
+    return max(candidates, key=_page_upright_score)
 
 
 def try_page_perspective_correction(
@@ -602,14 +713,28 @@ def _upright_card_if_upside_down(image: np.ndarray) -> np.ndarray:
 
     photo_score = _photo_side_score(gray)
     flipped_photo = _photo_side_score(flipped_gray)
+
+    # Strong portrait cue: NJ DL fronts keep the photo on the left.
     if _should_trust_photo_orientation(gray, photo_score):
         if flipped_photo > photo_score + 1.0:
             image = flipped
         return _trim_embedded_card_margins(image)
 
-    score = _card_orientation_score(image)
-    flipped_score = _card_orientation_score(flipped)
-    if flipped_score > score + 1.0:
+    # Strong barcode cue: NJ DL backs keep dense barcode edges near the top.
+    if _strong_barcode_back_signal(gray, photo_score) or _strong_barcode_back_signal(
+        flipped_gray, flipped_photo
+    ):
+        score = _card_orientation_score(image)
+        flipped_score = _card_orientation_score(flipped)
+        if flipped_score > score + 1.0:
+            image = flipped
+        return _trim_embedded_card_margins(image)
+
+    # Weak / noisy page crops: only flip on a clear photo-side preference.
+    # Avoid barcode-noise flips that invert an already-upright front.
+    if flipped_photo > photo_score + 2.0 and flipped_photo > 1.5:
+        image = flipped
+    elif photo_score < -2.0 and flipped_photo > abs(photo_score):
         image = flipped
     return _trim_embedded_card_margins(image)
 
@@ -646,7 +771,8 @@ def _tighten_wallet_card_crop(
 ) -> np.ndarray:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape[:2]
-    if height * width < 1_000_000 or height < 900:
+    # Apply to medium crops too — wallet/flatbed margins often remain after extract.
+    if height * width < 250_000 or height < 280 or width < 400:
         return image
 
     barcode_score, top_edge, bottom_edge = _card_barcode_edge_score(gray)
@@ -665,7 +791,7 @@ def _tighten_wallet_card_crop(
     if header_y <= 0:
         return image
 
-    pad = max(options.min_padding_pixels, 24)
+    pad = max(options.min_padding_pixels, 16)
     top = max(0, header_y - int(height * 0.08))
     edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 40, 120)
     row_edges = edges.sum(axis=1)
@@ -681,7 +807,7 @@ def _tighten_wallet_card_crop(
     bottom = min(height, int(rows[-1]) + pad)
     left = max(0, int(cols[0]) - pad)
     right = min(width, int(cols[-1]) + pad)
-    if bottom - top < 300 or right - left < 450:
+    if bottom - top < 220 or right - left < 320:
         return image
 
     cropped = image[top:bottom, left:right]
@@ -714,7 +840,9 @@ def _is_balanced_card_crop(gray: np.ndarray) -> bool:
     if bands[0] < bands[2] * 0.2 and bands[1] < bands[2] * 0.25:
         return False
     # Content crushed into the top band with almost no mid-band content.
-    if bands[0] > bands[2] * 4.0 and bands[1] < bands[0] * 0.20:
+    # Skip on landscape cards: DL backs concentrate barcode edges in the top third.
+    aspect_ratio = width / max(height, 1)
+    if aspect_ratio < 1.35 and bands[0] > bands[2] * 4.0 and bands[1] < bands[0] * 0.20:
         return False
     return True
 
@@ -756,13 +884,24 @@ def _select_card_extraction_candidate(
         if not _is_balanced_card_crop(warped_gray):
             return float("-inf")
         height, width = warped_gray.shape[:2]
+        aspect_ratio = width / max(height, 1)
+        aspect_fit = 1.0 - min(abs(aspect_ratio - 1.58) / 0.55, 1.0)
+        photo = abs(_photo_side_score(warped_gray))
+        barcode_score, top_edge, bottom_edge = _card_barcode_edge_score(warped_gray)
+        structure = max(photo, abs(barcode_score), top_edge * 0.5, bottom_edge * 0.5)
+
         # Prefer compact card crops over large scanner-bed rectangles.
         area_penalty = 1.0
         if height * width > 1_500_000:
             area_penalty = 0.35
         elif height * width > 1_000_000:
             area_penalty = 0.65
-        return score * method_boost.get(priority, 1.0) * area_penalty
+
+        return (
+            score * method_boost.get(priority, 1.0) * area_penalty
+            + aspect_fit * 0.12
+            + min(structure, 50.0) * 0.004
+        )
 
     return max(candidates, key=adjusted_score)[1]
 
@@ -845,8 +984,8 @@ def _score_flat_scan_card_contour(
 
     _, _, bbox_width, bbox_height = cv2.boundingRect(contour)
     center_y = cv2.boundingRect(contour)[1] + bbox_height / 2
-    if center_y > page_height * 0.55:
-        return None
+    # Cards may sit in the lower half of a flatbed scan (common for backs).
+    position_score = 1.0 - min(abs(center_y - page_height * 0.35) / max(page_height * 0.55, 1.0), 1.0)
 
     points = cv2.boxPoints(rect).astype(np.float32)
     ordered = order_quadrilateral_points(points)
@@ -859,7 +998,6 @@ def _score_flat_scan_card_contour(
     )
     aspect_score = 1.0 - min(abs(aspect_ratio - 1.58) / 0.6, 1.0)
     area_score = 1.0 - min(abs(area_ratio - 0.08) / 0.12, 1.0)
-    position_score = 1.0 - min(center_y / max(page_height * 0.55, 1.0), 1.0)
     score = area_ratio * max(aspect_score, 0.2) * max(area_score, 0.2) * max(position_score, 0.15)
 
     warped = warp_quadrilateral(image, ordered)
@@ -890,8 +1028,20 @@ def _score_card_quadrilateral(
         return None
 
     ordered = order_quadrilateral_points(points)
-    if _quad_parallel_side_difference(ordered) > options.max_card_perspective_distortion:
-        return None
+    distortion = _quad_parallel_side_difference(ordered)
+    if distortion > options.max_card_perspective_distortion:
+        # Approx polys on shadowed flatbed cards are often trapezoidal; fall back
+        # to the min-area rectangle when it still looks like an ID card.
+        rect = cv2.minAreaRect(contour)
+        box_width, box_height = rect[1]
+        if min(box_width, box_height) < 80:
+            return None
+        rect_aspect = max(box_width, box_height) / max(min(box_width, box_height), 1.0)
+        if not options.min_card_aspect_ratio <= rect_aspect <= options.max_card_aspect_ratio:
+            return None
+        ordered = order_quadrilateral_points(cv2.boxPoints(rect).astype(np.float32))
+        aspect_ratio = rect_aspect
+        distortion = 0.0
 
     rectangularity = area / max(_quad_bounding_area(ordered), 1.0)
     aspect_score = 1.0 - min(abs(aspect_ratio - 1.58) / 0.6, 1.0)

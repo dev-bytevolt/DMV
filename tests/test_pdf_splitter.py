@@ -28,6 +28,22 @@ def test_split_pdf_by_classification(sample_pdf: Path, sample_classification, tm
     assert get_pdf_page_count(output_dir / "Insurance_Card.pdf") == 1
 
 
+def test_split_pdf_by_classification_clears_stale_files(
+    sample_pdf: Path, sample_classification, tmp_path: Path
+) -> None:
+    classification = ClassificationResult.from_dict(sample_classification)
+    output_dir = tmp_path / "split"
+    output_dir.mkdir()
+    stale = output_dir / "Dealer_Invoice.pdf"
+    stale.write_bytes(b"%PDF-stale")
+
+    split_pdf_by_classification(sample_pdf, classification, output_dir)
+
+    assert not stale.exists()
+    assert (output_dir / "Driver_License_Copy.pdf").exists()
+    assert (output_dir / "Insurance_Card.pdf").exists()
+
+
 def test_split_pdf_rejects_invalid_page(sample_pdf: Path, tmp_path: Path) -> None:
     classification = ClassificationResult.from_dict(
         {

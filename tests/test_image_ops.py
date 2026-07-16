@@ -66,6 +66,92 @@ def test_full_page_form_mode_skips_perspective(monkeypatch) -> None:
     assert processed.size > 0
 
 
+def test_upright_page_if_sideways_rotates_vertical_form() -> None:
+    from dmv.preprocess.image_ops import upright_page_if_sideways
+
+    # Portrait canvas with strong vertical ruling (sideways landscape form).
+    page = np.full((1100, 850, 3), 255, dtype=np.uint8)
+    for x in range(80, 780, 28):
+        cv2.line(page, (x, 60), (x, 1040), (0, 0, 0), 2)
+    # Dense band at top of portrait becomes the right side after 90° CW.
+    page[60:200, 80:780] = 40
+
+    upright = upright_page_if_sideways(page)
+    assert upright.shape[1] > upright.shape[0]  # landscape after quarter turn
+    mid = upright.shape[1] // 2
+    left_dark = float(np.mean(upright[:, :mid] < 120))
+    right_dark = float(np.mean(upright[:, mid:] < 120))
+    assert right_dark > left_dark
+
+
+def test_upright_page_if_sideways_keeps_already_upright_form() -> None:
+    from dmv.preprocess.image_ops import upright_page_if_sideways
+
+    page = np.full((1100, 850, 3), 255, dtype=np.uint8)
+    for y in range(80, 1020, 28):
+        cv2.line(page, (60, y), (790, y), (0, 0, 0), 2)
+    page[60:180, 60:790] = 40
+
+    upright = upright_page_if_sideways(page)
+    assert upright.shape == page.shape
+
+
+def test_full_page_form_mode_rotates_sideways_dealer_invoice_like_page() -> None:
+    page = np.full((1100, 850, 3), 255, dtype=np.uint8)
+    for x in range(80, 780, 24):
+        cv2.line(page, (x, 50), (x, 1050), (0, 0, 0), 2)
+    page[40:220, 80:780] = 30
+
+    processed = preprocess_page_image(
+        page,
+        PreprocessOptions(dpi=120),
+        mode=PreprocessMode.FULL_PAGE_FORM,
+    )
+    assert processed.shape[1] >= processed.shape[0]
+
+
+def test_default_mode_does_not_quarter_turn_sideways_pages(monkeypatch) -> None:
+    calls: list[bool] = []
+
+    def tracking_upright(image):
+        calls.append(True)
+        return image
+
+    monkeypatch.setattr(
+        "dmv.preprocess.image_ops.upright_page_if_sideways",
+        tracking_upright,
+    )
+    page = np.full((1100, 850, 3), 255, dtype=np.uint8)
+    for x in range(80, 780, 24):
+        cv2.line(page, (x, 50), (x, 1050), (0, 0, 0), 2)
+
+    preprocess_page_image(page, PreprocessOptions(dpi=120), mode=PreprocessMode.DEFAULT)
+    assert calls == []
+
+
+def test_embedded_card_mode_does_not_quarter_turn(monkeypatch) -> None:
+    calls: list[bool] = []
+
+    def tracking_upright(image):
+        calls.append(True)
+        return image
+
+    monkeypatch.setattr(
+        "dmv.preprocess.image_ops.upright_page_if_sideways",
+        tracking_upright,
+    )
+    monkeypatch.setattr(
+        "dmv.preprocess.image_ops._extract_embedded_card",
+        lambda *_args, **_kwargs: None,
+    )
+    preprocess_page_image(
+        _blank_page(),
+        PreprocessOptions(),
+        mode=PreprocessMode.EMBEDDED_CARD,
+    )
+    assert calls == []
+
+
 def test_embedded_card_mode_uses_card_detection(monkeypatch) -> None:
     card = np.full((320, 500, 3), 200, dtype=np.uint8)
 
@@ -176,6 +262,26 @@ def test_upright_card_if_upside_down_flips_inverted_fronts() -> None:
     left_dark = float(np.mean(upright[:, : upright.shape[1] // 2] < 120))
     right_dark = float(np.mean(upright[:, upright.shape[1] // 2 :] < 120))
     assert left_dark > right_dark
+
+
+def test_pick_best_embedded_card_prefers_upright_over_larger_misoriented() -> None:
+    from dmv.preprocess.image_ops import _pick_best_embedded_card
+
+    good = np.full((400, 640, 3), 230, dtype=np.uint8)
+    good[:, :220] = 40  # photo on left
+    good[40:120, 240:600] = 30  # header band
+
+    bad = np.full((900, 1100, 3), 210, dtype=np.uint8)
+    # Near-square oversized crop with photo on the right (upside-down cue).
+    bad[:, 700:] = 40
+    bad[700:820, 100:800] = 30
+
+    best = _pick_best_embedded_card([bad, good], PreprocessOptions())
+    assert best is not None
+    left_dark = float(np.mean(best[:, : best.shape[1] // 2] < 120))
+    right_dark = float(np.mean(best[:, best.shape[1] // 2 :] < 120))
+    assert left_dark > right_dark
+    assert abs(best.shape[1] / best.shape[0] - 1.58) < abs(bad.shape[1] / bad.shape[0] - 1.58)
 
 
 def test_upright_card_if_upside_down_flips_barcode_backs() -> None:

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 from dmv.consolidation.rover import rover_consensus, vin_consensus
 
 REVIEW_CONFIDENCE_THRESHOLD = 0.75
+# Near-miss OCR distance. Variants farther than this are treated as outliers
+# and do not drag confidence / force review by themselves.
 REVIEW_DISAGREEMENT_THRESHOLD = 0.15
 
 
@@ -113,51 +116,88 @@ def collect_source_variants(
     )
 
 
+def _partition_variants(
+    consensus: str,
+    source_variants: list[FieldVariant],
+) -> tuple[list[FieldVariant], list[tuple[FieldVariant, float]], list[FieldVariant]]:
+    """Split sources into exact matches, near-miss OCR variants, and distant outliers."""
+    consensus_norm = _normalize_for_compare(consensus)
+    exact: list[FieldVariant] = []
+    near: list[tuple[FieldVariant, float]] = []
+    distant: list[FieldVariant] = []
+    for variant in source_variants:
+        variant_norm = _normalize_for_compare(variant.value)
+        distance = _distance_ratio(variant_norm, consensus_norm)
+        if variant_norm == consensus_norm:
+            exact.append(variant)
+        elif distance <= REVIEW_DISAGREEMENT_THRESHOLD:
+            near.append((variant, distance))
+        else:
+            distant.append(variant)
+    return exact, near, distant
+
+
+def _plurality_strength(
+    consensus: str,
+    source_variants: list[FieldVariant],
+) -> tuple[int, int, float]:
+    """Return (exact_count, second_place_count, strength in (0, 1])."""
+    consensus_norm = _normalize_for_compare(consensus)
+    counts = Counter(
+        _normalize_for_compare(variant.value) for variant in source_variants
+    )
+    exact_count = counts.get(consensus_norm, 0)
+    other_counts = [count for key, count in counts.items() if key != consensus_norm]
+    second_count = max(other_counts) if other_counts else 0
+    strength = exact_count / max(exact_count + second_count, 1)
+    return exact_count, second_count, strength
+
+
 def compute_field_confidence(
     consensus: str,
     source_variants: list[FieldVariant],
     *,
     unique_variants: list[FieldVariant] | None = None,
 ) -> float:
+    del unique_variants  # kept for call-site compatibility
     if not source_variants:
         return 0.0
     if len(source_variants) == 1:
         return source_variants[0].confidence
 
-    unique = unique_variants or collect_variants(
-        [(variant.value, variant.confidence) for variant in source_variants]
+    exact, near, _distant = _partition_variants(consensus, source_variants)
+    if not exact:
+        # Consensus is synthesized / only near-misses support it.
+        if not near:
+            return 0.0
+        peak = max(variant.confidence for variant, _ in near)
+        return max(0.0, min(1.0, peak * 0.6))
+
+    peak = max(variant.confidence for variant in exact)
+    mean_exact = sum(variant.confidence for variant in exact) / len(exact)
+    base = 0.65 * peak + 0.35 * mean_exact
+
+    exact_count, second_count, plurality_strength = _plurality_strength(
+        consensus,
+        source_variants,
     )
-    consensus_norm = _normalize_for_compare(consensus)
-    total_weight = sum(variant.confidence for variant in source_variants)
-    if total_weight <= 0:
-        return 0.0
 
-    matching_weight = 0.0
-    agreeing_confidences: list[float] = []
-    for variant in source_variants:
-        variant_norm = _normalize_for_compare(variant.value)
-        distance = _distance_ratio(variant_norm, consensus_norm)
-        if distance <= REVIEW_DISAGREEMENT_THRESHOLD:
-            matching_weight += variant.confidence
-            agreeing_confidences.append(variant.confidence)
+    # Soft OCR penalty only from near-miss variants — distant outliers are ignored.
+    near_penalty = 0.0
+    if near:
+        total_weight = sum(variant.confidence for variant in source_variants)
+        if total_weight > 0:
+            near_weight = sum(variant.confidence for variant, _ in near)
+            avg_near_distance = sum(distance for _, distance in near) / len(near)
+            near_penalty = 0.35 * avg_near_distance * (near_weight / total_weight)
 
-    distances = [
-        _distance_ratio(_normalize_for_compare(variant.value), consensus_norm)
-        for variant in unique
-    ]
-    support_ratio = matching_weight / total_weight
-    peak_agreeing = max(agreeing_confidences) if agreeing_confidences else 0.0
-    avg_disagreement = sum(distances) / len(distances)
+    confidence = base * (0.85 + 0.15 * plurality_strength) * (1.0 - near_penalty)
 
-    # Weighted agreement among sources, discounted by how far unique variants
-    # drift from the chosen consensus.
-    confidence = peak_agreeing * support_ratio * (1.0 - 0.6 * avg_disagreement)
-
-    if any(
-        _normalize_for_compare(variant.value) == consensus_norm
-        for variant in source_variants
-    ):
-        confidence = min(1.0, confidence * 1.05)
+    # Reward clear repeated agreement.
+    if exact_count >= 2:
+        confidence = min(1.0, confidence * 1.04)
+    if exact_count > second_count and exact_count >= 2:
+        confidence = min(1.0, confidence * 1.03)
 
     return max(0.0, min(1.0, confidence))
 
@@ -169,27 +209,23 @@ def needs_manual_review(
     *,
     unique_variants: list[FieldVariant] | None = None,
 ) -> bool:
+    del unique_variants  # kept for call-site compatibility
     if not consensus or not source_variants:
         return True
     if confidence < REVIEW_CONFIDENCE_THRESHOLD:
         return True
 
-    unique = unique_variants or collect_variants(
-        [(variant.value, variant.confidence) for variant in source_variants]
-    )
-    consensus_norm = _normalize_for_compare(consensus)
-    distinct_distances = [
-        _distance_ratio(_normalize_for_compare(variant.value), consensus_norm)
-        for variant in unique
-    ]
-    if len(unique) > 1 and max(distinct_distances) > REVIEW_DISAGREEMENT_THRESHOLD:
+    exact, _near, _distant = _partition_variants(consensus, source_variants)
+    # Synthesized consensus that does not exactly match any source.
+    if not exact:
         return True
 
-    # Synthesized value that does not exactly match any source variant.
-    if len(unique) > 1 and not any(
-        _normalize_for_compare(variant.value) == consensus_norm
-        for variant in source_variants
-    ):
+    exact_count, second_count, _strength = _plurality_strength(
+        consensus,
+        source_variants,
+    )
+    # Require review when the winner is not a clear plurality over other values.
+    if exact_count <= second_count:
         return True
 
     return False

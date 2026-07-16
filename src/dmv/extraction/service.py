@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,6 +75,8 @@ class ExtractionService:
         import asyncio
         import time
 
+        if extracted_dir.exists():
+            shutil.rmtree(extracted_dir)
         extracted_dir.mkdir(parents=True, exist_ok=True)
         targets = self._targets_for_extraction(
             corrected_dir,
@@ -136,7 +139,10 @@ class ExtractionService:
             )
             output_json.write_text(
                 json.dumps(
-                    normalize_extraction_payload(outcome.result),
+                    normalize_extraction_payload(
+                        outcome.result,
+                        document_type=target.document_type,
+                    ),
                     indent=2,
                     ensure_ascii=False,
                 )
@@ -178,7 +184,13 @@ class ExtractionService:
 
         output_json.write_text(
             json.dumps(
-                [normalize_extraction_payload(item) for item in part_payloads],
+                [
+                    normalize_extraction_payload(
+                        item,
+                        document_type=target.document_type,
+                    )
+                    for item in part_payloads
+                ],
                 indent=2,
                 ensure_ascii=False,
             )

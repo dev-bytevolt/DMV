@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from dmv.config import Settings
 from dmv.document_types import build_classification_prompt
 from dmv.extraction.prompt import build_extraction_prompt
-from dmv.extraction.schemas import EXTRACTION_JSON_SCHEMA
+from dmv.extraction.schemas import build_extraction_json_schema
 from dmv.logging_config import format_error
 from dmv.models.classification import ClassificationResult
 from dmv.models.usage import TokenUsage
@@ -289,7 +289,7 @@ class OpenAIExtractionProvider(ExtractionProvider):
             "format": {
                 "type": "json_schema",
                 "name": "document_extraction",
-                "schema": EXTRACTION_JSON_SCHEMA,
+                "schema": build_extraction_json_schema(document_type),
                 "strict": False,
             }
         }
