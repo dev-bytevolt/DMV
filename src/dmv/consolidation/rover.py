@@ -157,22 +157,28 @@ def vin_consensus(hypotheses: list[tuple[str, float]]) -> str:
 
 
 def rover_consensus(hypotheses: list[tuple[str, float]]) -> str:
-    """Combine multiple OCR hypotheses with confidence-weighted voting."""
+    """Combine multiple OCR hypotheses with confidence-weighted voting.
+
+    Comparison is case-insensitive, but the returned value preserves the
+    original casing of the best matching source hypothesis (never forced
+    uppercase).
+    """
     def _normalize(v: str) -> str:
-        # Make comparison robust to OCR casing and weird whitespace.
         v = v.strip()
         v = " ".join(v.split())
         return v.upper()
 
-    filtered = [
-        (_normalize(value), confidence)
+    originals = [
+        (value.strip(), confidence)
         for value, confidence in hypotheses
         if value and value.strip()
     ]
-    if not filtered:
+    if not originals:
         return ""
-    if len(filtered) == 1:
-        return filtered[0][0]
+    if len(originals) == 1:
+        return originals[0][0]
+
+    filtered = [(_normalize(value), confidence) for value, confidence in originals]
 
     # Guardrail: avoid stitching unrelated strings into Frankenstein output.
     # Use the highest-confidence hypothesis as a seed and keep only hypotheses
@@ -207,7 +213,7 @@ def rover_consensus(hypotheses: list[tuple[str, float]]) -> str:
     if not clustered:
         clustered = filtered
     if len(clustered) == 1:
-        return clustered[0][0]
+        return _restore_original_casing(clustered[0][0], originals)
 
     strings = [value for value, _ in clustered]
     weights = [confidence for _, confidence in clustered]
@@ -225,4 +231,50 @@ def rover_consensus(hypotheses: list[tuple[str, float]]) -> str:
         if votes:
             consensus.append(max(votes.items(), key=lambda item: item[1])[0])
 
-    return "".join(consensus).strip()
+    consensus_norm = "".join(consensus).strip()
+    return _restore_original_casing(consensus_norm, originals)
+
+
+def _restore_original_casing(
+    consensus_norm: str,
+    originals: list[tuple[str, float]],
+) -> str:
+    """Map a normalized consensus string back to a source spelling."""
+    if not consensus_norm:
+        return ""
+
+    def _normalize(v: str) -> str:
+        return " ".join(v.strip().split()).upper()
+
+    exact = [
+        (value, confidence)
+        for value, confidence in originals
+        if _normalize(value) == consensus_norm
+    ]
+    if exact:
+        return max(exact, key=lambda item: item[1])[0]
+
+    def _levenshtein(a: str, b: str) -> int:
+        m, n = len(a), len(b)
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        for i in range(m + 1):
+            dp[i][0] = i
+        for j in range(n + 1):
+            dp[0][j] = j
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                cost = 0 if a[i - 1] == b[j - 1] else 1
+                dp[i][j] = min(
+                    dp[i - 1][j - 1] + cost,
+                    dp[i - 1][j] + 1,
+                    dp[i][j - 1] + 1,
+                )
+        return dp[m][n]
+
+    def distance(value: str) -> float:
+        normalized = _normalize(value)
+        return _levenshtein(normalized, consensus_norm) / max(
+            len(normalized), len(consensus_norm), 1
+        )
+
+    return min(originals, key=lambda item: (distance(item[0]), -item[1]))[0]

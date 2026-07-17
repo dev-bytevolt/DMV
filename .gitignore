@@ -12,3 +12,5 @@ artifacts/
 .venv/
 venv/
 .DS_Store
+*service-account*.json
+*-sa.json

@@ -14,6 +14,13 @@ def _optional_float(name: str) -> float | None:
     return float(raw)
 
 
+def _optional_path(name: str) -> Path | None:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return None
+    return Path(raw.strip()).expanduser()
+
+
 def _debug_mode() -> bool:
     raw = os.getenv("DEBUG_MODE", "false").strip().lower()
     return raw in {"1", "true", "yes", "on"}
@@ -33,6 +40,16 @@ class Settings:
     openai_cached_input_price_per_million: float | None
     preprocess_dpi: int
     debug_mode: bool
+    vertex_project: str = ""
+    vertex_location: str = "us-central1"
+    vertex_model: str = "gemini-3.1-pro-preview"
+    vertex_service_account_json: Path | None = None
+
+    @property
+    def active_model(self) -> str:
+        if self.ai_provider == "vertex":
+            return self.vertex_model
+        return self.openai_model
 
 
 def _preprocess_dpi() -> int:
@@ -65,4 +82,10 @@ def load_settings(env_path: Path | None = None) -> Settings:
         ),
         preprocess_dpi=_preprocess_dpi(),
         debug_mode=_debug_mode(),
+        vertex_project=os.getenv("VERTEX_PROJECT", "").strip(),
+        vertex_location=os.getenv("VERTEX_LOCATION", "us-central1").strip()
+        or "us-central1",
+        vertex_model=os.getenv("VERTEX_MODEL", "gemini-3.1-pro-preview").strip()
+        or "gemini-3.1-pro-preview",
+        vertex_service_account_json=_optional_path("VERTEX_SERVICE_ACCOUNT_JSON"),
     )

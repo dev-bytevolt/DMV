@@ -75,6 +75,7 @@ def print_results(summary: RunSummary, settings: Settings) -> int:
         print_debug_exclusions(result.excluded_documents)
         print_preprocessing_stats(result.preprocessing)
         print_extraction_stats(result.extraction)
+        print_consolidation_stats(result.consolidation)
         print_processing_stats(_file_total_stats(result, settings), settings)
         if not result.validation.is_valid:
             exit_code = 1
@@ -167,6 +168,19 @@ def print_extraction_stats(extraction: ExtractionResult, *, prefix: str = "") ->
             )
 
 
+def print_consolidation_stats(consolidation, *, prefix: str = "") -> None:
+    print(f"{prefix}Consolidation:")
+    print(f"{prefix}  Fields: {consolidation.field_count}")
+    if consolidation.field_count > 0:
+        print(
+            f"{prefix}  Review not required: "
+            f"{consolidation.fields_without_review}/{consolidation.field_count} "
+            f"({consolidation.review_pass_percent:.1f}%)"
+        )
+    else:
+        print(f"{prefix}  Review not required: n/a")
+
+
 def print_processing_stats(
     stats: ProcessingStats,
     settings: Settings,
@@ -175,7 +189,7 @@ def print_processing_stats(
 ) -> None:
     print(f"{prefix}Statistics:")
     print(f"{prefix}  Processing time: {stats.elapsed_seconds:.1f}s")
-    print(f"{prefix}  OpenAI tokens: {_format_token_usage(stats.usage)}")
+    print(f"{prefix}  Tokens: {_format_token_usage(stats.usage)}")
     print(f"{prefix}  Estimated cost: {_format_cost(stats, settings)}")
 
 
@@ -211,11 +225,8 @@ def _format_token_usage(usage: TokenUsage) -> str:
 
 def _format_cost(stats: ProcessingStats, settings: Settings) -> str:
     if stats.cost is None:
-        model = stats.usage.model or settings.openai_model
-        return (
-            f"unknown for {model} — set OPENAI_INPUT_PRICE_PER_MILLION and "
-            "OPENAI_OUTPUT_PRICE_PER_MILLION in .env"
-        )
+        model = stats.usage.model or settings.active_model
+        return f"unknown for {model} (no built-in pricing for this model)"
 
     return (
         f"${stats.cost.amount_usd:.4f} USD "

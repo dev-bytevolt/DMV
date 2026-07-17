@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dmv.consolidation.field import consolidate_field
+from dmv.consolidation.groups import (
+    ENTITY_GROUPS,
+    consolidate_entity_group,
+    count_consolidated_fields,
+    grouped_canonical_fields,
+)
 from dmv.extraction.fields import CANONICAL_EXTRACTION_FIELDS
 
 logger = logging.getLogger(__name__)
@@ -18,7 +24,14 @@ class ConsolidationResult:
     artifact_dir: Path
     output_json: Path
     field_count: int
+    fields_without_review: int
     extra_document_count: int
+
+    @property
+    def review_pass_percent(self) -> float:
+        if self.field_count <= 0:
+            return 100.0
+        return 100.0 * self.fields_without_review / self.field_count
 
 
 def _field_value(raw: object) -> tuple[str, float] | None:
@@ -87,7 +100,18 @@ def consolidate_extractions(
             )
 
     consolidated: dict[str, object] = {}
+    nested_fields = grouped_canonical_fields()
+
+    # Nested entity groups (owner / lienholder / dealership / …).
+    for group in ENTITY_GROUPS:
+        nest = consolidate_entity_group(field_hypotheses, group)
+        if nest:
+            consolidated[group.nest_key] = nest
+
+    # Remaining flat canonical fields.
     for field in CANONICAL_EXTRACTION_FIELDS:
+        if field in nested_fields:
+            continue
         hypotheses = field_hypotheses[field]
         if not hypotheses:
             continue
@@ -102,6 +126,8 @@ def consolidate_extractions(
     if extra_by_document:
         consolidated["extra"] = extra_by_document
 
+    field_count, fields_without_review = count_consolidated_fields(consolidated)
+
     output_json = artifact_dir / CONSOLIDATED_DATA_FILENAME
     output_json.write_text(
         json.dumps(consolidated, indent=2, ensure_ascii=False) + "\n",
@@ -109,13 +135,14 @@ def consolidate_extractions(
     )
     logger.info(
         "Consolidated %s field(s) and %s extra document(s) -> %s",
-        len(consolidated) - (1 if "extra" in consolidated else 0),
+        field_count,
         len(extra_by_document),
         output_json.name,
     )
     return ConsolidationResult(
         artifact_dir=artifact_dir,
         output_json=output_json,
-        field_count=len(consolidated) - (1 if "extra" in consolidated else 0),
+        field_count=field_count,
+        fields_without_review=fields_without_review,
         extra_document_count=len(extra_by_document),
     )

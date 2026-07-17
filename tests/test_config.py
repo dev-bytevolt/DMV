@@ -50,6 +50,10 @@ def test_load_settings_defaults(monkeypatch, tmp_path: Path) -> None:
         "OPENAI_OUTPUT_PRICE_PER_MILLION",
         "OPENAI_CACHED_INPUT_PRICE_PER_MILLION",
         "PREPROCESS_DPI",
+        "VERTEX_PROJECT",
+        "VERTEX_LOCATION",
+        "VERTEX_MODEL",
+        "VERTEX_SERVICE_ACCOUNT_JSON",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -66,6 +70,37 @@ def test_load_settings_defaults(monkeypatch, tmp_path: Path) -> None:
     assert settings.artifacts_dir == Path("artifacts")
     assert settings.preprocess_dpi == 200
     assert settings.debug_mode is False
+    assert settings.vertex_project == ""
+    assert settings.vertex_location == "us-central1"
+    assert settings.vertex_model == "gemini-3.1-pro-preview"
+    assert settings.vertex_service_account_json is None
+    assert settings.active_model == "gpt-4o"
+
+
+def test_load_settings_vertex(tmp_path: Path) -> None:
+    sa_path = tmp_path / "sa.json"
+    sa_path.write_text("{}", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "AI_PROVIDER=vertex",
+                "VERTEX_PROJECT=my-project",
+                "VERTEX_LOCATION=europe-west1",
+                "VERTEX_MODEL=gemini-3.1-pro-preview",
+                f"VERTEX_SERVICE_ACCOUNT_JSON={sa_path}",
+            ]
+        )
+    )
+
+    settings = load_settings(env_file)
+
+    assert settings.ai_provider == "vertex"
+    assert settings.vertex_project == "my-project"
+    assert settings.vertex_location == "europe-west1"
+    assert settings.vertex_model == "gemini-3.1-pro-preview"
+    assert settings.vertex_service_account_json == sa_path
+    assert settings.active_model == "gemini-3.1-pro-preview"
 
 
 def test_load_settings_debug_mode(tmp_path: Path) -> None:

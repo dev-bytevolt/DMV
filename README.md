@@ -11,7 +11,7 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Set `OPENAI_API_KEY` in `.env`.
+Set `OPENAI_API_KEY` in `.env` (or Vertex credentials when using `AI_PROVIDER=vertex`).
 
 ## Usage
 
@@ -45,9 +45,13 @@ Deskew uses Hough line angles (better for full-page forms). Perspective warp onl
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | — | OpenAI API key |
-| `AI_PROVIDER` | `openai` | AI provider (`openai` for now) |
-| `OPENAI_MODEL` | `gpt-4o` | Model for classification |
+| `OPENAI_API_KEY` | — | OpenAI API key (when `AI_PROVIDER=openai`) |
+| `AI_PROVIDER` | `openai` | AI provider (`openai` or `vertex`) |
+| `OPENAI_MODEL` | `gpt-4o` | OpenAI model |
+| `VERTEX_PROJECT` | — | GCP project (optional; falls back to SA `project_id`) |
+| `VERTEX_LOCATION` | `us-central1` | Vertex AI region |
+| `VERTEX_MODEL` | `gemini-3.1-pro-preview` | Vertex Gemini model |
+| `VERTEX_SERVICE_ACCOUNT_JSON` | — | Path to GCP service account JSON |
 | `WORKER_POOL_SIZE` | `5` | Max concurrent workers (classification + preprocessing) |
 | `MAX_AI_RETRIES` | `3` | Retries with exponential backoff |
 | `AI_RETRY_BASE_DELAY_SECONDS` | `1.0` | Base delay between retries |
@@ -58,7 +62,7 @@ Deskew uses Hough line angles (better for full-page forms). Perspective warp onl
 | `OPENAI_OUTPUT_PRICE_PER_MILLION` | — | Optional USD override for cost estimates |
 | `OPENAI_CACHED_INPUT_PRICE_PER_MILLION` | — | Optional cached-input rate override |
 
-Built-in pricing is used for known models (e.g. `gpt-5.4`, `gpt-4o`) when overrides are not set. The CLI prints processing time, token usage from the OpenAI response, and an estimated USD cost after each file.
+Built-in pricing is used for known models (e.g. `gpt-5.4`, `gpt-4o`, `gemini-3.1-pro-preview`) when overrides are not set. The CLI prints processing time, token usage, and an estimated USD cost after each file.
 
 ## Tests
 

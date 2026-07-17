@@ -22,6 +22,12 @@ def test_rover_consensus_returns_single_hypothesis() -> None:
     assert rover_consensus([("  ABC  ", 0.8)]) == "ABC"
 
 
+def test_rover_consensus_preserves_source_casing() -> None:
+    assert rover_consensus([("po box 30203, college station", 0.73)]) == (
+        "po box 30203, college station"
+    )
+
+
 def test_rover_consensus_picks_agreement() -> None:
     hypotheses = [
         ("5NMMBDTL6TH064502", 0.98),
@@ -82,7 +88,7 @@ def test_rover_consensus_does_not_stitch_unrelated_strings() -> None:
         ("COLLEGE ST", 0.78),
         ("COLLEGE STA", 0.92),
     ]
-    assert rover_consensus(hypotheses) == "TOMS RIVER"
+    assert rover_consensus(hypotheses) == "Toms River"
 
 
 def test_collect_variants_deduplicates_by_normalized_value() -> None:
@@ -166,7 +172,7 @@ def test_consolidate_field_flags_review_for_conflicting_values() -> None:
         ]
     )
     assert result is not None
-    assert result.value == "TOMS RIVER"
+    assert result.value == "Toms River"
     assert len(result.variants) == 3
     assert result.review_required is True
 
@@ -228,6 +234,7 @@ def test_consolidate_extractions_merges_canonical_fields(tmp_path: Path) -> None
 
     assert result.output_json.name == CONSOLIDATED_DATA_FILENAME
     assert result.field_count == 2
+    assert result.fields_without_review == 1
     assert payload["vehicle_vin"]["value"] == "5NMMBDTL6TH064502"
     assert len(payload["vehicle_vin"]["variants"]) == 2
     assert payload["vehicle_vin"]["variants"][0]["source_document_name"] == "Certificate of Origin for a Vehicle"
@@ -284,9 +291,103 @@ def test_consolidate_extractions_handles_split_document_parts(tmp_path: Path) ->
     result = consolidate_extractions(extracted_dir, artifact_dir)
     payload = json.loads(result.output_json.read_text(encoding="utf-8"))
 
-    assert "NAFTALI" in payload["lessee_name"]["value"]
-    assert "SHAPIRO" in payload["lessee_name"]["value"]
-    assert len(payload["lessee_name"]["variants"]) == 2
-    assert payload["lessee_name"]["variants"][0]["source_document_name"] == "Motor Vehicle Lease Agreement (part 2/2)"
+    assert "NAFTALI" in payload["lessee"]["name"]["value"]
+    assert "SHAPIRO" in payload["lessee"]["name"]["value"]
+    assert len(payload["lessee"]["name"]["variants"]) == 2
+    assert payload["lessee"]["name"]["variants"][0]["source_document_name"] == (
+        "Motor Vehicle Lease Agreement (part 2/2)"
+    )
     assert "Motor Vehicle Lease Agreement (part 1/2)" in payload["extra"]
     assert "Motor Vehicle Lease Agreement (part 2/2)" in payload["extra"]
+
+
+def test_lienholder_address_parts_come_from_one_source(tmp_path: Path) -> None:
+    """Do not Frankenstein address parts across conflicting documents."""
+    artifact_dir = tmp_path / "bundle"
+    extracted_dir = artifact_dir / "extracted"
+    extracted_dir.mkdir(parents=True)
+
+    (extracted_dir / "Dealer_Invoice.json").write_text(
+        json.dumps(
+            {
+                "document_type": "dealer_invoice",
+                "source_document_name": "Interstate Toyota Dealer Invoice",
+                "lienholder_name": {"value": "TOYOTA LEASE TRUST", "confidence": 0.98},
+                "lienholder_address_street": {"value": "PO BOX 30203", "confidence": 0.96},
+                "lienholder_address_city": {"value": "COLLEGE STATION", "confidence": 0.95},
+                "lienholder_address_state": {"value": "TX", "confidence": 0.98},
+                "lienholder_address_zip": {"value": "77842", "confidence": 0.98},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (extracted_dir / "Retail_Certificate.json").write_text(
+        json.dumps(
+            {
+                "document_type": "retail_certificate_of_sale",
+                "source_document_name": "Retail Certificate of Sale Receipt",
+                "lienholder_name": {"value": "TOYOTA MOTOR SALES", "confidence": 0.96},
+                "lienholder_address_street": {"value": "16 HENDERSON DR", "confidence": 0.96},
+                "lienholder_address_city": {"value": "west caldwell", "confidence": 0.92},
+                "lienholder_address_state": {"value": "NJ", "confidence": 0.98},
+                "lienholder_address_zip": {"value": "07006", "confidence": 0.98},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = consolidate_extractions(extracted_dir, artifact_dir)
+    payload = json.loads(result.output_json.read_text(encoding="utf-8"))
+
+    lienholder = payload["lienholder"]
+    address = lienholder["address"]
+    source = address["source_document_name"]
+    assert source in {
+        "Interstate Toyota Dealer Invoice",
+        "Retail Certificate of Sale Receipt",
+    }
+    assert address["source_document_type"] == lienholder["source_document_type"]
+
+    if source == "Interstate Toyota Dealer Invoice":
+        assert lienholder["name"]["value"] == "TOYOTA LEASE TRUST"
+        assert address["street"]["value"] == "PO BOX 30203"
+        assert address["city"]["value"] == "COLLEGE STATION"
+        assert address["state"]["value"] == "TX"
+        assert address["zip"]["value"] == "77842"
+    else:
+        assert lienholder["name"]["value"] == "TOYOTA MOTOR SALES"
+        assert address["street"]["value"] == "16 HENDERSON DR"
+        assert address["city"]["value"] == "west caldwell"
+        assert address["state"]["value"] == "NJ"
+        assert address["zip"]["value"] == "07006"
+
+    assert address["street"]["review_required"] is True
+    assert result.field_count == 5
+    assert 0 <= result.review_pass_percent <= 100
+
+
+def test_owner_address_preserves_source_casing(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "bundle"
+    extracted_dir = artifact_dir / "extracted"
+    extracted_dir.mkdir(parents=True)
+
+    (extracted_dir / "Retail.json").write_text(
+        json.dumps(
+            {
+                "document_type": "retail_certificate_of_sale",
+                "source_document_name": "Retail Certificate of Sale Receipt",
+                "owner_address_street": {
+                    "value": "po box 30203, college station",
+                    "confidence": 0.73,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = consolidate_extractions(extracted_dir, artifact_dir)
+    payload = json.loads(result.output_json.read_text(encoding="utf-8"))
+
+    assert payload["owner"]["address"]["street"]["value"] == (
+        "po box 30203, college station"
+    )

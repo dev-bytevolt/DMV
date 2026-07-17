@@ -59,6 +59,31 @@ def test_estimate_cost_uses_cached_input_rate() -> None:
     assert cost.amount_usd == pytest.approx(1.1375)
 
 
+def test_resolve_model_pricing_for_gemini_31_pro_preview() -> None:
+    settings = Settings(
+        ai_provider="vertex",
+        openai_api_key="",
+        openai_model="gpt-4o",
+        worker_pool_size=1,
+        max_ai_retries=1,
+        ai_retry_base_delay_seconds=0.01,
+        artifacts_dir="artifacts",
+        openai_input_price_per_million=None,
+        openai_output_price_per_million=None,
+        openai_cached_input_price_per_million=None,
+        preprocess_dpi=200,
+        debug_mode=False,
+        vertex_model="gemini-3.1-pro-preview",
+    )
+
+    pricing, source = resolve_model_pricing("gemini-3.1-pro-preview", settings)
+
+    assert pricing.input_per_million == 2.00
+    assert pricing.output_per_million == 12.00
+    assert pricing.cached_input_per_million == 0.20
+    assert "gemini-3.1-pro-preview" in source
+
+
 def test_estimate_cost_respects_env_override() -> None:
     settings = Settings(
         ai_provider="openai",

@@ -62,6 +62,28 @@ MODEL_PRICING_BY_PREFIX: tuple[tuple[str, ModelPricing], ...] = (
             cached_input_per_million=0.50,
         ),
     ),
+    (
+        "gemini-3.1-pro-preview",
+        ModelPricing(
+            input_per_million=2.00,
+            output_per_million=12.00,
+            cached_input_per_million=0.20,
+            long_context_input_threshold=200_000,
+            long_context_input_per_million=4.00,
+            long_context_output_per_million=18.00,
+        ),
+    ),
+    (
+        "gemini-3.1-pro",
+        ModelPricing(
+            input_per_million=2.00,
+            output_per_million=12.00,
+            cached_input_per_million=0.20,
+            long_context_input_threshold=200_000,
+            long_context_input_per_million=4.00,
+            long_context_output_per_million=18.00,
+        ),
+    ),
 )
 
 
@@ -91,7 +113,7 @@ def estimate_cost(
     usage: TokenUsage,
     settings: Settings,
 ) -> CostEstimate | None:
-    resolved = resolve_model_pricing(usage.model or settings.openai_model, settings)
+    resolved = resolve_model_pricing(usage.model or settings.active_model, settings)
     if resolved is None:
         return None
 

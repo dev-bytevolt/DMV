@@ -46,6 +46,7 @@ def _empty_consolidation(tmp_path: Path) -> ConsolidationResult:
         artifact_dir=artifact_dir,
         output_json=output_json,
         field_count=0,
+        fields_without_review=0,
         extra_document_count=0,
     )
 
@@ -152,7 +153,7 @@ def test_print_results_reports_complete_coverage(
     assert "Extraction:" in output
     assert "Statistics:" in output
     assert "Processing time: 1.5s" in output
-    assert "OpenAI tokens:" in output
+    assert "Tokens:" in output
     assert "Estimated cost:" in output
     preprocessing_pos = output.index("Preprocessing:")
     extraction_pos = output.index("Extraction:")

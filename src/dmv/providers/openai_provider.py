@@ -193,10 +193,14 @@ class OpenAIClassificationProvider(ClassificationProvider):
 def create_classification_provider(settings: Settings) -> ClassificationProvider:
     if settings.ai_provider == "openai":
         return OpenAIClassificationProvider(settings)
+    if settings.ai_provider == "vertex":
+        from dmv.providers.vertex_provider import VertexClassificationProvider
+
+        return VertexClassificationProvider(settings)
 
     raise ValueError(
         f"Unsupported AI provider: {settings.ai_provider!r}. "
-        "Supported providers: openai"
+        "Supported providers: openai, vertex"
     )
 
 
@@ -342,8 +346,12 @@ class OpenAIExtractionProvider(ExtractionProvider):
 def create_extraction_provider(settings: Settings) -> ExtractionProvider:
     if settings.ai_provider == "openai":
         return OpenAIExtractionProvider(settings)
+    if settings.ai_provider == "vertex":
+        from dmv.providers.vertex_provider import VertexExtractionProvider
+
+        return VertexExtractionProvider(settings)
 
     raise ValueError(
         f"Unsupported AI provider: {settings.ai_provider!r}. "
-        "Supported providers: openai"
+        "Supported providers: openai, vertex"
     )
