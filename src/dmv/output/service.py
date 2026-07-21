@@ -24,6 +24,7 @@ from dmv.output.mappings import (
     build_ownership_fields,
     build_uta_fields,
 )
+from dmv.output.tax_stamp import apply_uta_tax_stamp
 from dmv.pdf_splitter import classified_pdf_filename_for_document
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ def build_output_packet(
 
     build_cover_letter_pdf(data, cover_path)
     fill_acroform_pdf(blanks_dir / BLANK_UTA, uta_path, build_uta_fields(data))
+    apply_uta_tax_stamp(uta_path, data)
     fill_acroform_pdf(blanks_dir / BLANK_BA49, ba49_path, build_ba49_fields(data))
     fill_acroform_pdf(
         blanks_dir / BLANK_OWNERSHIP,

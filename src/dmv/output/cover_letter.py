@@ -6,7 +6,12 @@ from typing import Any
 
 import fitz
 
-from dmv.output.values import first_value, get_consolidated_value, truthy_flag
+from dmv.output.tax_resolution import (
+    money_text,
+    resolve_collect_lfis,
+    resolve_collect_taxes,
+)
+from dmv.output.values import first_value
 
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 COVER_LETTERHEAD_PATH = _ASSETS_DIR / "cover_logo.jpeg"
@@ -43,12 +48,6 @@ FONT_ITALIC = "cover-times-it"
 FONT_EMPHASIS = "cover-times-bi"
 
 
-def _money(raw: str | None) -> str:
-    if not raw:
-        return ""
-    return raw.strip().replace("$", "").replace(",", "")
-
-
 def cover_letter_fields(data: dict[str, Any]) -> dict[str, str]:
     cover_date = first_value(data, "cover_date") or date.today().strftime("%m/%d/%Y")
     name = first_value(
@@ -63,9 +62,9 @@ def cover_letter_fields(data: dict[str, Any]) -> dict[str, str]:
     lien = first_value(data, "lien_holder", "lienholder.name", "lienholder_name") or "N/A"
     plates = first_value(data, "plate_type", "plate_number") or ""
     color = first_value(data, "vehicle_color") or ""
-    purchase = _money(first_value(data, "purchase_price", "gross_sales_lease_price"))
-    sales_tax = _money(first_value(data, "sales_tax", "sales_tax_amount"))
-    lfis = _money(first_value(data, "lfis_amount"))
+    purchase = money_text(first_value(data, "purchase_price", "gross_sales_lease_price"))
+    sales_tax = money_text(first_value(data, "sales_tax", "sales_tax_amount"))
+    lfis = money_text(first_value(data, "lfis_amount", "surcharge_amount"))
     return {
         "date": cover_date,
         "name": name or "",
@@ -79,26 +78,15 @@ def cover_letter_fields(data: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def resolve_collect_taxes(data: dict[str, Any]) -> bool | None:
-    """Prefer explicit flag; if missing, YES when a sales-tax amount is present."""
-    flagged = truthy_flag(get_consolidated_value(data, "collect_taxes"))
-    if flagged is not None:
-        return flagged
-    sales_tax = _money(first_value(data, "sales_tax", "sales_tax_amount"))
-    if sales_tax:
-        return True
-    return None
-
-
-def resolve_collect_lfis(data: dict[str, Any]) -> bool | None:
-    """Prefer explicit flag; if missing, YES when an LFIS amount is present, else NO."""
-    flagged = truthy_flag(get_consolidated_value(data, "collect_lfis"))
-    if flagged is not None:
-        return flagged
-    lfis = _money(first_value(data, "lfis_amount"))
-    if lfis:
-        return True
-    return False
+# Re-export for callers that imported from cover_letter historically.
+__all__ = [
+    "COVER_LETTERHEAD_PATH",
+    "COVER_LOGO_PATH",
+    "build_cover_letter_pdf",
+    "cover_letter_fields",
+    "resolve_collect_lfis",
+    "resolve_collect_taxes",
+]
 
 
 def _register_fonts(

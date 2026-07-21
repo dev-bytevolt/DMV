@@ -8,7 +8,9 @@ from pypdf import PdfReader
 
 from dmv.models.classification import ClassificationResult
 from dmv.output.cover_letter import build_cover_letter_pdf
+from dmv.output.fill_pdf import fill_acroform_pdf
 from dmv.output.mappings import (
+    BLANK_UTA,
     OUTPUT_BA49,
     OUTPUT_COVER,
     OUTPUT_OWNERSHIP,
@@ -18,6 +20,7 @@ from dmv.output.mappings import (
     build_uta_fields,
 )
 from dmv.output.service import build_output_packet
+from dmv.output.tax_stamp import apply_uta_tax_stamp
 from dmv.output.values import first_value, get_consolidated_value, truthy_flag
 
 
@@ -211,8 +214,21 @@ def test_build_output_packet_respects_debug_mode(tmp_path: Path) -> None:
     assert result.page_count == 7
 
     filled_ba49 = PdfReader(str(result.ba49_pdf))
-    vin_field = filled_ba49.get_fields()["Vehicle Identification Number (VIN)"]
-    assert vin_field.get("/V") == "VINPACKED000000001"
+    assert filled_ba49.get_fields() in (None, {})
+    ba49_doc = fitz.open(result.ba49_pdf)
+    ba49_text = ba49_doc[0].get_text()
+    assert not list(ba49_doc[0].widgets() or [])
+    ba49_doc.close()
+    assert "VINPACKED000000001" in ba49_text
+
+    uta_doc = fitz.open(result.uta_pdf)
+    uta_text = uta_doc[0].get_text().replace("\xa0", " ")
+    assert not list(uta_doc[0].widgets() or [])
+    # No sales tax prepaid → customer-pays stamp
+    assert "Sales/Use Tax" in uta_text
+    assert "Purchase Price" in uta_text
+    assert "N.J. SALES TAX SATISFIED" not in uta_text
+    uta_doc.close()
 
     # Without debug mode, cover letter classified doc is also appended.
     result_all = build_output_packet(
@@ -225,3 +241,32 @@ def test_build_output_packet_respects_debug_mode(tmp_path: Path) -> None:
     )
     assert result_all.appended_document_count == 3
     assert result_all.page_count == 8
+
+
+def test_uta_tax_stamp_both_variants(tmp_path: Path) -> None:
+    blanks_dir = Path("artifacts/blanks")
+    blank = blanks_dir / BLANK_UTA
+    assert blank.is_file()
+    data = {
+        "purchase_price": {"value": "28279.70", "confidence": 1.0},
+        "sales_tax": {"value": "1873.53", "confidence": 1.0},
+        "sale_date": {"value": "6/17/2026", "confidence": 1.0},
+        "dealership_entity_id": {"value": "7086161", "confidence": 1.0},
+        "vehicle_vin": {"value": "TESTVIN00000000001", "confidence": 1.0},
+    }
+    customer = tmp_path / "uta_customer.pdf"
+    dealer = tmp_path / "uta_dealer.pdf"
+    fill_acroform_pdf(blank, customer, build_uta_fields(data))
+    fill_acroform_pdf(blank, dealer, build_uta_fields(data))
+    apply_uta_tax_stamp(customer, data, force_dealer_paid=False)
+    apply_uta_tax_stamp(dealer, data, force_dealer_paid=True)
+
+    customer_text = fitz.open(customer)[0].get_text()
+    dealer_text = fitz.open(dealer)[0].get_text()
+    assert "Sales/Use Tax" in customer_text
+    assert "N.J. SALES TAX SATISFIED" not in customer_text
+    assert "N.J. SALES TAX SATISFIED" in dealer_text
+    assert "M.V. Ident No." in dealer_text
+    assert "Dealer's Signature" in dealer_text
+    assert "28279.70" in customer_text
+    assert "1873.53" in customer_text

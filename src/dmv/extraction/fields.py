@@ -105,6 +105,8 @@ CANONICAL_EXTRACTION_FIELDS: tuple[str, ...] = (
     "seller_name",
     "sale_date",
     "sales_tax_amount",
+    "sales_tax_paid",
+    "sales_tax_exemption_code",
     # Lease agreement
     "lessor_name",
     "monthly_payment",
@@ -138,10 +140,17 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "plate_type": "Requested plate type",
     "vehicle_color": "Vehicle color",
     "purchase_price": "Purchase or sale price",
-    "sales_tax": "Sales tax amount",
+    "sales_tax": (
+        "Sales tax amount, or wording such as TAX SATISFIED / PAID when tax was "
+        "already remitted by the dealer"
+    ),
     "lfis_amount": "Luxury and fuel inefficient surcharge amount",
     "collect_taxes": "Whether NJ DMV should collect taxes (YES/NO)",
     "collect_lfis": "Whether NJ DMV should collect LFIS (YES/NO)",
+    "sales_tax_paid": (
+        "Whether sales tax was already paid/satisfied by the dealer (YES/NO)"
+    ),
+    "sales_tax_exemption_code": "Sales tax exemption code if present",
     "vehicle_year": "Vehicle model year",
     "vehicle_make": "Vehicle make",
     "vehicle_model": "Vehicle model",
@@ -225,7 +234,9 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "buyer_name": "Buyer or purchaser name",
     "seller_name": "Seller name",
     "sale_date": "Sale or transaction date",
-    "sales_tax_amount": "Sales tax amount on invoice or receipt",
+    "sales_tax_amount": (
+        "Sales tax amount on invoice or receipt, or paid/satisfied wording if shown"
+    ),
     "lessor_name": "Lessor name on lease agreement",
     "monthly_payment": "Monthly lease payment",
     "lease_start_date": "Lease start date",
