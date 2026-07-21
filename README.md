@@ -56,6 +56,7 @@ Deskew uses Hough line angles (better for full-page forms). Perspective warp onl
 | `MAX_AI_RETRIES` | `3` | Retries with exponential backoff |
 | `AI_RETRY_BASE_DELAY_SECONDS` | `1.0` | Base delay between retries |
 | `ARTIFACTS_DIR` | `artifacts` | Output directory |
+| `BLANKS_DIR` | `artifacts/blanks` | Blank form templates (cover + 3 NJMVC PDFs) |
 | `PREPROCESS_DPI` | `200` | Page rasterization DPI for preprocessing (150–200) |
 | `DEBUG_MODE` | `false` | Exclude test-fixture output forms from further processing |
 | `OPENAI_INPUT_PRICE_PER_MILLION` | — | Optional USD override for cost estimates |

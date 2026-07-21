@@ -11,6 +11,7 @@ from dmv.debug_exclusions import ExcludedDocument
 from dmv.extraction.service import ExtractionResult, ExtractionStats
 from dmv.models.classification import ClassificationResult
 from dmv.models.usage import ProcessingStats, TokenUsage
+from dmv.output.service import OutputPacketResult
 from dmv.preprocess.service import PreprocessingResult, PreprocessingStats
 from dmv.validation import (
     ClassificationValidationReport,
@@ -48,6 +49,21 @@ def _empty_consolidation(tmp_path: Path) -> ConsolidationResult:
         field_count=0,
         fields_without_review=0,
         extra_document_count=0,
+    )
+
+
+def _empty_output_packet(tmp_path: Path) -> OutputPacketResult:
+    artifact_dir = tmp_path / "artifacts" / "sample"
+    output_dir = artifact_dir / "output"
+    return OutputPacketResult(
+        output_dir=output_dir,
+        cover_letter_pdf=output_dir / "Cover_Letter.pdf",
+        uta_pdf=output_dir / "Universal_Title_Application.pdf",
+        ba49_pdf=output_dir / "Application_for_Vehicle_Registration.pdf",
+        ownership_pdf=output_dir / "New_Car_Ownership.pdf",
+        output_pdf=artifact_dir / "output.pdf",
+        appended_document_count=0,
+        page_count=0,
     )
 
 
@@ -126,6 +142,7 @@ def _make_result(
         preprocessing=_empty_preprocessing(tmp_path),
         extraction=_empty_extraction(tmp_path),
         consolidation=_empty_consolidation(tmp_path),
+        output_packet=_empty_output_packet(tmp_path),
         excluded_documents=[],
     )
 
@@ -215,6 +232,7 @@ def test_print_results_reports_total_stats_after_all_steps(
         preprocessing=preprocessing,
         extraction=extraction,
         consolidation=_empty_consolidation(tmp_path),
+        output_packet=_empty_output_packet(tmp_path),
         excluded_documents=[],
     )
     summary = RunSummary(results=[result], total_elapsed_seconds=6.0)
@@ -263,6 +281,7 @@ def test_print_results_reports_debug_exclusions(
         preprocessing=result.preprocessing,
         extraction=result.extraction,
         consolidation=result.consolidation,
+        output_packet=result.output_packet,
         excluded_documents=[
             ExcludedDocument(
                 id="doc-001",
@@ -435,3 +454,5 @@ def test_cli_main_integration(monkeypatch, sample_pdf: Path, tmp_path: Path) -> 
     assert (tmp_path / "artifacts" / "sample" / "classified").exists()
     assert (tmp_path / "artifacts" / "sample" / "corrected").exists()
     assert (tmp_path / "artifacts" / "sample" / "extracted").exists()
+    assert (tmp_path / "artifacts" / "sample" / "output").exists()
+    assert (tmp_path / "artifacts" / "sample" / "output.pdf").exists()

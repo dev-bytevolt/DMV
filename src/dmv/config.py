@@ -44,6 +44,7 @@ class Settings:
     vertex_location: str = "us-central1"
     vertex_model: str = "gemini-3.1-pro-preview"
     vertex_service_account_json: Path | None = None
+    blanks_dir: Path = Path("artifacts/blanks")
 
     @property
     def active_model(self) -> str:
@@ -88,4 +89,5 @@ def load_settings(env_path: Path | None = None) -> Settings:
         vertex_model=os.getenv("VERTEX_MODEL", "gemini-3.1-pro-preview").strip()
         or "gemini-3.1-pro-preview",
         vertex_service_account_json=_optional_path("VERTEX_SERVICE_ACCOUNT_JSON"),
+        blanks_dir=Path(os.getenv("BLANKS_DIR", "artifacts/blanks")),
     )

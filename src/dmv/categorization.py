@@ -15,6 +15,7 @@ from dmv.debug_exclusions import ExcludedDocument, identify_debug_exclusions
 from dmv.extraction.service import ExtractionResult, ExtractionService
 from dmv.models.classification import ClassificationResult
 from dmv.models.usage import ProcessingStats, TokenUsage
+from dmv.output.service import OutputPacketResult, build_output_packet
 from dmv.pdf_splitter import artifact_paths, get_pdf_page_count, write_artifacts
 from dmv.preprocess.service import PreprocessingResult, PreprocessingService
 from dmv.providers import ClassificationProvider, create_classification_provider
@@ -39,6 +40,7 @@ class FileProcessingResult:
     preprocessing: PreprocessingResult
     extraction: ExtractionResult
     consolidation: ConsolidationResult
+    output_packet: OutputPacketResult
     excluded_documents: list[ExcludedDocument]
 
 
@@ -137,6 +139,14 @@ class CategorizationService:
             debug_mode=self._settings.debug_mode,
         )
         consolidation = consolidate_extractions(extracted_dir, artifact_dir)
+        output_packet = build_output_packet(
+            artifact_dir=artifact_dir,
+            classified_dir=classified_dir,
+            consolidated_json=consolidation.output_json,
+            classification=classification,
+            blanks_dir=self._settings.blanks_dir,
+            debug_mode=self._settings.debug_mode,
+        )
         stats = ProcessingStats(
             elapsed_seconds=elapsed_seconds,
             usage=outcome.usage,
@@ -155,5 +165,6 @@ class CategorizationService:
             preprocessing=preprocessing,
             extraction=extraction,
             consolidation=consolidation,
+            output_packet=output_packet,
             excluded_documents=excluded_documents,
         )

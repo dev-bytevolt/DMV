@@ -54,7 +54,12 @@ def print_results(summary: RunSummary, settings: Settings) -> int:
         print(f"Corrected: {result.corrected_dir}")
         print(f"Extracted: {result.extracted_dir}")
         print(f"Consolidated: {result.consolidation.output_json}")
-
+        print(f"Output forms: {result.output_packet.output_dir}")
+        print(
+            f"Output packet: {result.output_packet.output_pdf} "
+            f"({result.output_packet.page_count} pages, "
+            f"{result.output_packet.appended_document_count} classified docs)"
+        )
         if not result.classification.documents:
             print("Documents found: none")
         else:
@@ -76,6 +81,7 @@ def print_results(summary: RunSummary, settings: Settings) -> int:
         print_preprocessing_stats(result.preprocessing)
         print_extraction_stats(result.extraction)
         print_consolidation_stats(result.consolidation)
+        print_output_packet_stats(result.output_packet)
         print_processing_stats(_file_total_stats(result, settings), settings)
         if not result.validation.is_valid:
             exit_code = 1
@@ -179,6 +185,14 @@ def print_consolidation_stats(consolidation, *, prefix: str = "") -> None:
         )
     else:
         print(f"{prefix}  Review not required: n/a")
+
+
+def print_output_packet_stats(output_packet, *, prefix: str = "") -> None:
+    print(f"{prefix}Output packet:")
+    print(f"{prefix}  Forms dir: {output_packet.output_dir}")
+    print(f"{prefix}  Packet PDF: {output_packet.output_pdf.name}")
+    print(f"{prefix}  Pages: {output_packet.page_count}")
+    print(f"{prefix}  Classified docs appended: {output_packet.appended_document_count}")
 
 
 def print_processing_stats(
