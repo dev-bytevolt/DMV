@@ -82,7 +82,9 @@ def build_output_packet(
     )
 
     merge_paths: list[Path] = [cover_path, uta_path, ba49_path, ownership_path]
-    docs = processable_documents(classification, debug_mode=debug_mode)
+    docs = processable_documents(
+        classification, debug_mode=debug_mode, for_append=True
+    )
     appended = 0
     for document in docs:
         filename = classified_pdf_filename_for_document(

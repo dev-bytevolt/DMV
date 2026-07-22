@@ -154,6 +154,7 @@ def test_consolidate_field_includes_metadata() -> None:
             ("5NMMBDT6TH064502", 0.6, "Insurance Card", "insurance_card"),
         ],
         use_vin=True,
+        field_name="vehicle_vin",
     )
     assert result is not None
     assert result.value == "5NMMBDTL6TH064502"
@@ -161,6 +162,77 @@ def test_consolidate_field_includes_metadata() -> None:
     assert result.variants[0].source_document_name == "Certificate of Origin"
     assert result.confidence > 0.7
     assert result.review_required is False
+
+
+def test_primary_source_uses_certificate_of_origin_even_when_outvoted() -> None:
+    result = consolidate_field(
+        [
+            ("WRONGVIN123456789", 0.99, "Dealer Invoice", "dealer_invoice"),
+            ("WRONGVIN123456789", 0.98, "Insurance Card", "insurance_card"),
+            ("5NMMBDTL6TH064502", 0.85, "Certificate of Origin", "manufacturer_certificate"),
+        ],
+        use_vin=True,
+        field_name="vehicle_vin",
+    )
+    assert result is not None
+    assert result.value == "5NMMBDTL6TH064502"
+    assert result.review_required is True
+
+
+def test_primary_source_confirmed_when_other_documents_agree() -> None:
+    result = consolidate_field(
+        [
+            ("5NMMBDTL6TH064502", 0.98, "Certificate of Origin", "manufacturer_certificate"),
+            ("5NMMBDTL6TH064502", 0.95, "Dealer Invoice", "dealer_invoice"),
+            ("5NMMBDT6TH064502", 0.6, "Insurance Card", "insurance_card"),
+        ],
+        use_vin=True,
+        field_name="vehicle_vin",
+    )
+    assert result is not None
+    assert result.value == "5NMMBDTL6TH064502"
+    assert result.review_required is False
+
+
+def test_primary_source_vin_confirmation_ignores_hyphen_differences() -> None:
+    result = consolidate_field(
+        [
+            ("5N1BT3BB1TC-818433", 0.98, "Certificate of Origin", "manufacturer_certificate"),
+            ("5N1BT3BB1TC818433", 0.95, "Dealer Invoice", "dealer_invoice"),
+        ],
+        use_vin=True,
+        field_name="vehicle_vin",
+    )
+    assert result is not None
+    assert result.value == "5N1BT3BB1TC818433"
+    assert result.review_required is False
+
+
+def test_primary_source_vehicle_model_requires_confirmation() -> None:
+    result = consolidate_field(
+        [
+            ("GRAND HIGHLANDER", 0.99, "Certificate of Origin", "manufacturer_certificate"),
+            ("Grand Highlander XLE AWD", 0.95, "Lease Agreement", "lease_agreement"),
+            ("HIGHLANDER", 0.9, "Insurance Card", "insurance_card"),
+        ],
+        field_name="vehicle_model",
+    )
+    assert result is not None
+    assert result.value == "GRAND HIGHLANDER"
+    assert result.review_required is True
+
+
+def test_primary_source_falls_back_without_certificate_of_origin() -> None:
+    result = consolidate_field(
+        [
+            ("Toms River", 0.98, "GEICO Insurance", "insurance_card"),
+            ("COLLEGE ST", 0.78, "Dealer Invoice", "dealer_invoice"),
+        ],
+        field_name="vehicle_model",
+    )
+    assert result is not None
+    assert result.value == "Toms River"
+    assert result.review_required is True
 
 
 def test_consolidate_field_flags_review_for_conflicting_values() -> None:
@@ -241,6 +313,7 @@ def test_consolidate_extractions_merges_canonical_fields(tmp_path: Path) -> None
     assert payload["vehicle_vin"]["variants"][1]["source_document_name"] == "Dealer Invoice"
     assert "confidence" in payload["vehicle_vin"]
     assert "review_required" in payload["vehicle_vin"]
+    assert payload["vehicle_vin"]["review_required"] is False
     assert payload["vehicle_make"]["value"] == "GENESIS"
     assert payload["vehicle_make"]["review_required"] is True
     assert payload["extra"]["Certificate of Origin for a Vehicle"] == [

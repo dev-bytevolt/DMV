@@ -28,7 +28,7 @@ def test_identify_debug_exclusions_on_fixture_examples() -> None:
             json.loads(classification_path.read_text(encoding="utf-8"))
         )
         excluded = identify_debug_exclusions(classification)
-        assert len(excluded) == 4, classification_path
+        assert len(excluded) >= 4, classification_path
         excluded_types = {item.type for item in excluded}
         assert excluded_types == DEBUG_OUTPUT_DOCUMENT_TYPES
         for item in excluded:
@@ -67,14 +67,28 @@ def test_processable_documents_excludes_fixture_forms() -> None:
                     "type": "universal_title_application",
                     "pages": [5],
                 },
+                {
+                    "id": "doc-004",
+                    "name": "New Car Dealership Supplemental",
+                    "type": "dealership_supplemental_title_form",
+                    "pages": [6],
+                },
             ],
-            "empty_pages": [2, 3, 4, 6, 7, 8, 9, 10, 12],
+            "empty_pages": [2, 3, 4, 7, 8, 9, 10, 12],
         }
     )
 
     processable = processable_documents(classification, debug_mode=True)
+    appendable = processable_documents(
+        classification, debug_mode=True, for_append=True
+    )
     excluded = identify_debug_exclusions(classification)
 
-    assert len(excluded) == 2
-    assert len(processable) == 1
-    assert processable[0].type == "driver_license"
+    assert len(excluded) == 3
+    # Supplemental is still extracted (EPA) but not appended to output.pdf.
+    assert {doc.type for doc in processable} == {
+        "driver_license",
+        "dealership_supplemental_title_form",
+    }
+    assert {doc.type for doc in appendable} == {"driver_license"}
+

@@ -1,15 +1,23 @@
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 from typing import Any
 
 import fitz
 
+from dmv.output.formatting import (
+    cover_vin,
+    expand_color,
+    format_money,
+    last_name_token,
+    today_form_date,
+)
 from dmv.output.tax_resolution import (
-    money_text,
+    compute_lfis_amount,
+    cover_taxable_purchase_price,
     resolve_collect_lfis,
     resolve_collect_taxes,
+    sales_tax_display,
 )
 from dmv.output.values import first_value
 
@@ -48,32 +56,91 @@ FONT_ITALIC = "cover-times-it"
 FONT_EMPHASIS = "cover-times-bi"
 
 
-def cover_letter_fields(data: dict[str, Any]) -> dict[str, str]:
-    cover_date = first_value(data, "cover_date") or date.today().strftime("%m/%d/%Y")
-    name = first_value(
-        data,
-        "customer_name",
-        "driver.full_name",
-        "lessee.name",
-        "lessee_name",
-        "buyer_name",
+def _looks_titled_lessor(name: str) -> bool:
+    upper = name.upper()
+    return any(
+        token in upper
+        for token in ("LEASE", "TRUST", "LT LLC", "TITLING", "LESSOR")
     )
-    vin = first_value(data, "vehicle_vin") or ""
-    lien = first_value(data, "lien_holder", "lienholder.name", "lienholder_name") or "N/A"
-    plates = first_value(data, "plate_type", "plate_number") or ""
-    color = first_value(data, "vehicle_color") or ""
-    purchase = money_text(first_value(data, "purchase_price", "gross_sales_lease_price"))
-    sales_tax = money_text(first_value(data, "sales_tax", "sales_tax_amount"))
-    lfis = money_text(first_value(data, "lfis_amount", "surcharge_amount"))
+
+
+def _cover_customer_name(data: dict[str, Any]) -> str:
+    """Lease covers use LESSOR(LESSOR) LAST(LESSEE); otherwise customer/driver name."""
+    owner = first_value(
+        data,
+        "owner.full_name",
+        "owner.name",
+        "owner_full_name",
+        "owner_name",
+    )
+    lessee = first_value(data, "lessee.name", "lessee_name", "driver.full_name")
+    if owner and lessee and _looks_titled_lessor(owner):
+        return f"{' '.join(owner.split()).upper()}(LESSOR) {last_name_token(lessee)}(LESSEE)"
+
+    lessor = first_value(data, "lessor_name")
+    if lessor and lessee and _looks_titled_lessor(lessor):
+        return f"{' '.join(lessor.split()).upper()}(LESSOR) {last_name_token(lessee)}(LESSEE)"
+
+    explicit = first_value(data, "customer_name")
+    if explicit and "(LESSOR)" in explicit.upper():
+        return explicit
+
+    return (
+        first_value(
+            data,
+            "customer_name",
+            "driver.full_name",
+            "lessee.name",
+            "lessee_name",
+            "buyer_name",
+            "owner.full_name",
+            "owner.name",
+        )
+        or ""
+    )
+
+
+def _cover_plates(data: dict[str, Any]) -> str:
+    plate_type = (first_value(data, "plate_type") or "").strip()
+    if plate_type and "PLATE" in plate_type.upper():
+        return plate_type.upper()
+    # New retail certificates with an assigned plate still request NEW PLATES
+    # on the MV Express cover letter.
+    if first_value(data, "plate_number"):
+        return "NEW PLATES"
+    return plate_type or "NEW PLATES"
+
+
+def _cover_lien(data: dict[str, Any]) -> str:
+    lien = first_value(data, "lien_holder", "lienholder.name", "lienholder_name")
+    if not lien:
+        return "N/A"
+    owner = (
+        first_value(data, "owner.full_name", "owner.name", "owner_full_name", "owner_name")
+        or ""
+    )
+    # On lease deals the titling trust is the owner, not a lienholder — covers
+    # print N/A even when invoice lists the trust under a lien line.
+    if owner and owner.strip().upper() == lien.strip().upper():
+        return "N/A"
+    if "LEASE" in lien.upper() and "TRUST" in lien.upper():
+        return "N/A"
+    return lien
+
+
+def cover_letter_fields(data: dict[str, Any]) -> dict[str, str]:
+    vin = cover_vin(first_value(data, "vehicle_vin"))
+    lfis_amount = compute_lfis_amount(data)
+    lfis = format_money(lfis_amount) if lfis_amount is not None else ""
     return {
-        "date": cover_date,
-        "name": name or "",
+        "date": today_form_date(),
+        "name": _cover_customer_name(data),
         "vin": vin,
-        "lien": lien,
-        "plates": plates,
-        "color": color,
-        "purchase_price": purchase,
-        "sales_tax": sales_tax,
+        "lien": _cover_lien(data),
+        "plates": _cover_plates(data),
+        "color": expand_color(first_value(data, "vehicle_color")),
+        "purchase_price": cover_taxable_purchase_price(data),
+        "sales_tax": sales_tax_display(data),
         "lfis_amount": lfis,
     }
 

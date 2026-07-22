@@ -119,9 +119,26 @@ def consolidate_extractions(
         consolidated_field = consolidate_field(
             hypotheses,
             use_vin=field == "vehicle_vin",
+            field_name=field,
         )
         if consolidated_field is not None:
+            if field == "vehicle_epa_mpg_rating":
+                try:
+                    if float(consolidated_field.value.replace(",", "")) > 150:
+                        continue
+                except ValueError:
+                    pass
             consolidated[field] = consolidated_field.to_dict()
+
+    # Cash deals often put the purchaser only in buyer_name — promote into owner
+    # when owner nest is missing.
+    if "owner" not in consolidated:
+        buyer = consolidated.get("buyer_name")
+        if isinstance(buyer, dict) and buyer.get("value"):
+            consolidated["owner"] = {
+                "full_name": buyer,
+                "name": buyer,
+            }
 
     if extra_by_document:
         consolidated["extra"] = extra_by_document

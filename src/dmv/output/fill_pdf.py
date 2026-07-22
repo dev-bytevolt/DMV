@@ -9,6 +9,10 @@ from pypdf import PdfReader, PdfWriter
 
 logger = logging.getLogger(__name__)
 
+# Blank AcroForms use ``/Helv 0 Tf`` (auto-size). Pin a uniform size before bake
+# so VIN / short fields / long names all render at the same point size.
+FORM_FIELD_FONTSIZE = 9.0
+
 
 def fill_acroform_pdf(
     blank_path: Path,
@@ -22,6 +26,7 @@ def fill_acroform_pdf(
     reader = PdfReader(str(blank_path))
     writer = PdfWriter()
     writer.append(reader)
+    _strip_acrobat_prompts(writer)
 
     if field_values:
         known = set((reader.get_fields() or {}).keys())
@@ -43,7 +48,7 @@ def fill_acroform_pdf(
     with output_path.open("wb") as handle:
         writer.write(handle)
 
-    _bake_form_fields(output_path)
+    _bake_form_fields(output_path, fontsize=FORM_FIELD_FONTSIZE)
 
     logger.info(
         "Filled %s -> %s (%s field(s), flattened)",
@@ -54,10 +59,31 @@ def fill_acroform_pdf(
     return output_path
 
 
-def _bake_form_fields(pdf_path: Path) -> None:
+def _strip_acrobat_prompts(writer: PdfWriter) -> None:
+    """Remove blank-template JS alerts (e.g. BA-49 ONLINE FORM INSTRUCTIONS)."""
+    root = writer._root_object
+    if "/OpenAction" in root:
+        del root["/OpenAction"]
+    for page in writer.pages:
+        if "/AA" in page:
+            del page["/AA"]
+
+
+def _pin_text_field_fontsize(doc: fitz.Document, fontsize: float) -> None:
+    """Force every text widget to a fixed size (overrides auto-size DA ``0 Tf``)."""
+    for page in doc:
+        for widget in page.widgets() or []:
+            if widget.field_type_string != "Text":
+                continue
+            widget.text_fontsize = fontsize
+            widget.update()
+
+
+def _bake_form_fields(pdf_path: Path, *, fontsize: float = FORM_FIELD_FONTSIZE) -> None:
     """Convert AcroForm widgets to permanent page content (non-editable)."""
     doc = fitz.open(pdf_path)
     try:
+        _pin_text_field_fontsize(doc, fontsize)
         doc.bake(widgets=True, annots=False)
         baked = pdf_path.with_suffix(pdf_path.suffix + ".baked")
         doc.save(str(baked), garbage=3, deflate=True)

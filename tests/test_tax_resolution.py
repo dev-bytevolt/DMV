@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dmv.output.formatting import today_form_date
 from dmv.output.tax_resolution import (
     parse_money_amount,
     resolve_collect_lfis,
@@ -79,5 +80,5 @@ def test_tax_stamp_fields() -> None:
     fields = tax_stamp_fields(data)
     assert fields["purchase_price"] == "28279.70"
     assert fields["sales_tax"] == "1873.53"
-    assert fields["date"] == "06/20/2026"
+    assert fields["date"] == today_form_date()
     assert fields["mv_ident"] == "7086161"

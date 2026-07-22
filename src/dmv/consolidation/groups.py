@@ -9,6 +9,7 @@ from dmv.consolidation.field import (
     consolidate_field,
     needs_manual_review,
 )
+from dmv.consolidation.priority import OWNER_SOURCE_EXCLUDE_TYPES
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,7 @@ ENTITY_GROUPS: tuple[EntityGroupSpec, ...] = (
             nest_key="lessee",
             address_key="address",
             parts=(
+                ("lessee_address_street", "street"),
                 ("lessee_address_city", "city"),
                 ("lessee_address_state", "state"),
                 ("lessee_address_zip", "zip"),
@@ -187,26 +189,58 @@ def pick_coherent_entity_source(
     flat_fields: list[str],
     *,
     address_fields: frozenset[str] | None = None,
+    exclude_document_types: frozenset[str] | None = None,
+    prefer_entity_names: bool = False,
 ) -> tuple[str, str] | None:
     """Choose the source document that best covers an entity field group."""
     address_fields = address_fields or frozenset()
+    exclude_document_types = exclude_document_types or frozenset()
     per_source: dict[tuple[str, str], dict[str, tuple[str, float]]] = {}
 
     for flat in flat_fields:
         for source_key, value_conf in _best_per_source(field_hypotheses.get(flat, [])).items():
+            _name, doc_type = source_key
+            if doc_type in exclude_document_types:
+                continue
             per_source.setdefault(source_key, {})[flat] = value_conf
 
     if not per_source:
         return None
 
-    def score(source_key: tuple[str, str]) -> tuple[int, int, float, float]:
+    def _entity_name_boost(fields: dict[str, tuple[str, float]]) -> int:
+        if not prefer_entity_names:
+            return 0
+        for key in ("owner_full_name", "owner_name"):
+            if key not in fields:
+                continue
+            upper = fields[key][0].upper()
+            if any(token in upper for token in ("TRUST", "LLC", "LTD", "INC", "LEASE", "TITLING")):
+                return 1
+        return 0
+
+    def score(source_key: tuple[str, str]) -> tuple[int, int, int, int, float, float]:
         fields = per_source[source_key]
+        _name, doc_type = source_key
         address_completeness = sum(1 for flat in fields if flat in address_fields)
         completeness = len(fields)
         total_conf = sum(conf for _, conf in fields.values())
         avg_conf = total_conf / max(completeness, 1)
+        type_boost = 0
+        if doc_type == "manufacturer_certificate":
+            type_boost = 3
+        elif doc_type == "dealer_invoice":
+            type_boost = 2
+        elif doc_type == "retail_certificate_of_sale":
+            type_boost = 1
         # Prefer a complete address over a partial mix of scalars.
-        return (address_completeness, completeness, avg_conf, total_conf)
+        return (
+            address_completeness,
+            _entity_name_boost(fields),
+            type_boost,
+            completeness,
+            avg_conf,
+            total_conf,
+        )
 
     return max(per_source.keys(), key=score)
 
@@ -258,6 +292,10 @@ def consolidate_entity_group(
         field_hypotheses,
         flat_fields,
         address_fields=address_fields,
+        exclude_document_types=(
+            OWNER_SOURCE_EXCLUDE_TYPES if group.nest_key == "owner" else frozenset()
+        ),
+        prefer_entity_names=group.nest_key == "owner",
     )
 
     nest: dict[str, object] = {}

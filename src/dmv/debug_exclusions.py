@@ -5,12 +5,23 @@ from dataclasses import dataclass
 from dmv.models.classification import ClassifiedDocument, ClassificationResult
 
 # Forms present in test fixtures but produced as pipeline output, not real input.
+# Still extracted in debug mode when listed only under APPEND (EPA etc. live here).
 DEBUG_OUTPUT_DOCUMENT_TYPES: frozenset[str] = frozenset(
     {
         "cover_letter",
         "universal_title_application",
         "vehicle_registration_application",
         "dealership_supplemental_title_form",
+    }
+)
+
+# Skip LLM extraction entirely — these are pure pipeline outputs with no unique
+# input fields (EPA lives on the supplemental form, so that type is extracted).
+DEBUG_SKIP_EXTRACTION_TYPES: frozenset[str] = frozenset(
+    {
+        "cover_letter",
+        "universal_title_application",
+        "vehicle_registration_application",
     }
 )
 
@@ -29,7 +40,7 @@ DEBUG_OUTPUT_EXCLUSION_REASONS: dict[str, str] = {
     ),
     "dealership_supplemental_title_form": (
         "test fixture — NJMVC New Car Dealership Supplemental Passenger Vehicle "
-        "Title Form is pipeline output, not real input"
+        "Title Form is pipeline output (still extracted for EPA MPG); not appended"
     ),
 }
 
@@ -76,13 +87,22 @@ def processable_documents(
     classification: ClassificationResult,
     *,
     debug_mode: bool,
+    for_append: bool = False,
 ) -> list[ClassifiedDocument]:
+    """Documents to extract (default) or append into ``output.pdf``.
+
+    In debug mode, cover / UTA / BA-49 are skipped for extraction. The
+    dealership supplemental form is still extracted (EPA MPG) but never
+    appended, since the pipeline regenerates that form.
+    """
     if not debug_mode:
         return list(classification.documents)
 
-    excluded_ids = {item.id for item in identify_debug_exclusions(classification)}
+    skip_types = (
+        DEBUG_OUTPUT_DOCUMENT_TYPES if for_append else DEBUG_SKIP_EXTRACTION_TYPES
+    )
     return [
         document
         for document in classification.documents
-        if document.id not in excluded_ids
+        if document.type not in skip_types
     ]

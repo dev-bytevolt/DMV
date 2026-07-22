@@ -8,7 +8,7 @@ from pypdf import PdfReader
 
 from dmv.models.classification import ClassificationResult
 from dmv.output.cover_letter import build_cover_letter_pdf
-from dmv.output.fill_pdf import fill_acroform_pdf
+from dmv.output.fill_pdf import FORM_FIELD_FONTSIZE, fill_acroform_pdf
 from dmv.output.mappings import (
     BLANK_UTA,
     OUTPUT_BA49,
@@ -19,9 +19,33 @@ from dmv.output.mappings import (
     build_ownership_fields,
     build_uta_fields,
 )
+from dmv.output.formatting import today_form_date
+from dmv.output.cover_letter import cover_letter_fields
 from dmv.output.service import build_output_packet
 from dmv.output.tax_stamp import apply_uta_tax_stamp
 from dmv.output.values import first_value, get_consolidated_value, truthy_flag
+
+
+def test_uta_uses_mv_express_representative_defaults() -> None:
+    fields = build_uta_fields({"vehicle_vin": {"value": "ABC", "confidence": 1.0}})
+    assert fields["First Name"] == "DINA"
+    assert fields["Last Name"] == "NAMDAR"
+    assert "Telephone Number_3" not in fields
+    assert fields["Address_2"] == "160 EMPIRE BLVD"
+    assert fields["CityTown_3"] == "BROOKLYN"
+    assert fields["State_3"] == "NY"
+    assert fields["Zip Code_3"] == "11225"
+
+
+def test_cover_and_ownership_use_today_date() -> None:
+    data = {
+        "vehicle_vin": {"value": "ABC", "confidence": 1.0},
+        "sale_date": {"value": "01/01/2020", "confidence": 1.0},
+        "check_date": {"value": "02/02/2020", "confidence": 1.0},
+    }
+    today = today_form_date()
+    assert cover_letter_fields(data)["date"] == today
+    assert build_ownership_fields(data)["Date"] == today
 
 
 def test_get_consolidated_value_nested_and_flat() -> None:
@@ -85,11 +109,14 @@ def test_ba49_and_ownership_mappings() -> None:
     data = {
         "vehicle_vin": {"value": "ABC", "confidence": 1.0},
         "plate_number": {"value": "XYZ12", "confidence": 1.0},
+        "plate_type": {"value": "TRANSFER", "confidence": 1.0},
         "dealership": {
             "name": {"value": "Interstate Toyota", "confidence": 1.0},
             "address": {"city": {"value": "Paramus", "confidence": 1.0}},
         },
         "vehicle_make": {"value": "TOYOTA", "confidence": 1.0},
+        "vehicle_epa_mpg_rating": {"value": "36", "confidence": 1.0},
+        "gross_sales_lease_price": {"value": "45863.54", "confidence": 1.0},
     }
     ba49 = build_ba49_fields(data)
     ownership = build_ownership_fields(data)
@@ -98,6 +125,35 @@ def test_ba49_and_ownership_mappings() -> None:
     assert ownership["New Vehicle Dealership Name"] == "Interstate Toyota"
     assert ownership["City  Town"] == "Paramus"
     assert ownership["Make"] == "TOYOTA"
+    assert ownership["Check Box2"] == "/Yes"
+    assert ownership["Grose"].startswith("$")
+    assert ownership[
+        "ModelList the Average EPA miles per gallon rating Add both city and highway ratings and divide by 2 OR designate as Not Rated and skip to Step 4"
+    ] == "36"
+
+
+def test_uta_vehicle_year_make_use_year2_make2() -> None:
+    fields = build_uta_fields(
+        {
+            "vehicle_year": {"value": "2026", "confidence": 1.0},
+            "vehicle_make": {"value": "TOYOTA", "confidence": 1.0},
+            "odometer_reading": {"value": "0000001", "confidence": 1.0},
+            "plate_number": {"value": "ZLJ7766", "confidence": 1.0},
+        }
+    )
+    assert fields["Year_2"] == "2026"
+    assert fields["Make_2"] == "TOYOTA"
+    assert "Year" not in fields
+    assert "Make" not in fields
+    assert fields["Odometer Reading at time of purchase"] == "1"
+    assert "NJ License Plate Number" not in fields
+
+
+def test_cover_vin_uses_last_eight() -> None:
+    data = {
+        "vehicle_vin": {"value": "5TDAAAB53TS143834", "confidence": 1.0},
+    }
+    assert cover_letter_fields(data)["vin"] == "TS143834"
 
 
 def test_build_cover_letter_contains_vin(tmp_path: Path) -> None:
@@ -119,7 +175,9 @@ def test_build_cover_letter_contains_vin(tmp_path: Path) -> None:
     text = page.get_text().replace("\xa0", " ").replace("\xad", "")
     drawings = page.get_drawings()
     doc.close()
-    assert "TESTVIN00000000001" in text
+    # Cover prints last 8 of the VIN.
+    assert "00000001" in text
+    assert "TESTVIN00000000001" not in text
     assert "Angela Hajal" in text
     assert "YES" in text
     assert "NO" in text
@@ -143,7 +201,37 @@ def _write_tiny_pdf(path: Path, label: str) -> None:
     doc.close()
 
 
-def test_build_output_packet_respects_debug_mode(tmp_path: Path) -> None:
+def test_filled_form_text_uses_uniform_fontsize(tmp_path: Path) -> None:
+    """Blank DA uses auto-size (0 Tf); bake must pin a single point size."""
+    blanks_dir = Path("artifacts/blanks")
+    data = {
+        "vehicle_vin": {"value": "5TDAAAB53TS143834", "confidence": 1.0},
+        "vehicle_year": {"value": "2026", "confidence": 1.0},
+        "vehicle_make": {"value": "TOYOTA", "confidence": 1.0},
+        "vehicle_model": {"value": "GRAND HIGHLANDER", "confidence": 1.0},
+        "odometer_reading": {"value": "1", "confidence": 1.0},
+        "owner": {"full_name": {"value": "TOYOTA LEASE TRUST", "confidence": 1.0}},
+    }
+    out = tmp_path / "uta.pdf"
+    fill_acroform_pdf(blanks_dir / BLANK_UTA, out, build_uta_fields(data))
+    doc = fitz.open(out)
+    needles = {
+        "5TDAAAB53TS143834",
+        "2026",
+        "TOYOTA",
+        "GRAND HIGHLANDER",
+        "1",
+        "TOYOTA LEASE TRUST",
+    }
+    sizes: set[float] = set()
+    for block in doc[0].get_text("dict")["blocks"]:
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                if span["text"].strip() in needles:
+                    sizes.add(round(float(span["size"]), 1))
+    doc.close()
+    assert sizes == {FORM_FIELD_FONTSIZE}
+
     blanks_dir = Path("artifacts/blanks")
     assert (blanks_dir / "BA-49 BLANK-2022.pdf").is_file()
 

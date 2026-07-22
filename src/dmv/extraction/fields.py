@@ -73,6 +73,7 @@ CANONICAL_EXTRACTION_FIELDS: tuple[str, ...] = (
     "vehicle_weight_or_passengers",
     "insurance_company",
     "insurance_policy_number",
+    "lessee_address_street",
     "lessee_address_city",
     "lessee_address_state",
     "lessee_address_zip",
@@ -137,14 +138,30 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "customer_name": "Customer or applicant name on cover letter",
     "vehicle_vin": "Vehicle Identification Number (17 characters)",
     "lien_holder": "Lienholder name",
-    "plate_type": "Requested plate type",
-    "vehicle_color": "Vehicle color",
-    "purchase_price": "Purchase or sale price",
-    "sales_tax": (
-        "Sales tax amount, or wording such as TAX SATISFIED / PAID when tax was "
-        "already remitted by the dealer"
+    "plate_type": (
+        "Plate request wording when present (e.g. NEW PLATES, transfer). "
+        "Do not put the plate number here — use plate_number for that"
     ),
-    "lfis_amount": "Luxury and fuel inefficient surcharge amount",
+    "vehicle_color": (
+        "Vehicle color as a full color name when printed (e.g. GRAY, BLACK, WHITE, "
+        "CELESTIAL GRAY). Keep a color code only if that is all that appears"
+    ),
+    "purchase_price": (
+        "On invoices, prefer the amount sales tax was computed on when identifiable; "
+        "otherwise the vehicle selling/retail price line (e.g. NEW CAR RETAIL). "
+        "Not total cash price including fees. On leases, capitalized cost / amount "
+        "subject to tax when shown. Capture total cash separately via "
+        "gross_sales_lease_price when needed"
+    ),
+    "sales_tax": (
+        "Sales tax amount and/or wording such as TAX SATISFIED / PAID when tax was "
+        "already remitted by the dealer — include that wording when shown instead of "
+        "or in addition to a numeric amount"
+    ),
+    "lfis_amount": (
+        "Luxury/fuel inefficient vehicle surcharge (LFIS) when shown "
+        "(often ~0.4% of gross). Same concept as surcharge_amount when both appear"
+    ),
     "collect_taxes": "Whether NJ DMV should collect taxes (YES/NO)",
     "collect_lfis": "Whether NJ DMV should collect LFIS (YES/NO)",
     "sales_tax_paid": (
@@ -153,16 +170,28 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "sales_tax_exemption_code": "Sales tax exemption code if present",
     "vehicle_year": "Vehicle model year",
     "vehicle_make": "Vehicle make",
-    "vehicle_model": "Vehicle model",
+    "vehicle_model": (
+        "Vehicle model name without unnecessary trim/package unless the trim is part "
+        "of the model designation on the source (e.g. RAV4, not RAV4 XLE AWD)"
+    ),
     "vehicle_fuel_type": "Vehicle fuel type",
-    "vehicle_body_type": "Vehicle body type",
+    "vehicle_body_type": (
+        "Standard body style only (WAGON, SEDAN, SUV, PICKUP, COUPE, VAN, etc.). "
+        "Never trim, series, or package names like XLE, AWD, PLUG-IN HYBRID"
+    ),
     "vehicle_weight": "Vehicle weight",
     "odometer_reading": "Odometer reading at time of sale or disclosure",
     "odometer_not_actual": "Odometer not actual mileage indicator (Y/N)",
     "odometer_exceeded_mechanical": "Odometer exceeded mechanical limits (Y/N)",
     "owner_full_name": "Owner full name or entity name",
-    "owner_phone": "Owner telephone number",
-    "owner_license_or_entity_id": "Owner driver license or MVC business entity ID",
+    "owner_phone": (
+        "Telephone number for the titled owner/lessor when present "
+        "(not the lessee/customer unless they are the titled owner)"
+    ),
+    "owner_license_or_entity_id": (
+        "Driver license or MVC business entity ID for the titled owner/lessor "
+        "when present"
+    ),
     "owner_address_street": "Owner street address",
     "owner_address_city": "Owner city",
     "owner_address_state": "Owner state",
@@ -184,15 +213,27 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "representative_address_city": "Representative city",
     "representative_address_state": "Representative state",
     "representative_address_zip": "Representative ZIP code",
-    "vehicle_epa_mpg_rating": "Average EPA miles per gallon rating",
+    "vehicle_epa_mpg_rating": (
+        "Average EPA miles per gallon rating when printed on the document"
+    ),
     "dealership_name": "Dealership name",
-    "dealership_entity_id": "MVC business entity identification number",
+    "dealership_entity_id": (
+        "Numeric MVC/facility business entity number (e.g. 7104407). "
+        "Not a state dealer code like NY704"
+    ),
     "dealership_address_street": "Dealership street address",
     "dealership_address_city": "Dealership city",
     "dealership_address_state": "Dealership state",
     "dealership_address_zip": "Dealership ZIP code",
-    "gross_sales_lease_price": "Gross sales or lease price",
-    "surcharge_amount": "Luxury or fuel inefficient surcharge amount",
+    "gross_sales_lease_price": (
+        "Gross sales or lease price of the vehicle used for LFIS/surcharge "
+        "calculation (e.g. NEW CAR RETAIL / vehicle price before add-ons when shown). "
+        "Not necessarily total cash price including fees"
+    ),
+    "surcharge_amount": (
+        "Luxury/fuel inefficient vehicle surcharge when shown "
+        "(often ~0.4% of gross). Same concept as lfis_amount when both appear"
+    ),
     "plate_number": "License plate number",
     "plate_prefix": "License plate prefix",
     "owner_name": "Registered owner name",
@@ -206,6 +247,7 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "vehicle_weight_or_passengers": "Vehicle weight or number of passengers",
     "insurance_company": "Insurance company name",
     "insurance_policy_number": "Insurance policy number",
+    "lessee_address_street": "Lessee street address",
     "lessee_address_city": "Lessee city",
     "lessee_address_state": "Lessee state",
     "lessee_address_zip": "Lessee ZIP code",
@@ -235,7 +277,8 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "seller_name": "Seller name",
     "sale_date": "Sale or transaction date",
     "sales_tax_amount": (
-        "Sales tax amount on invoice or receipt, or paid/satisfied wording if shown"
+        "Sales tax amount on invoice or receipt, and/or TAX SATISFIED / PAID wording "
+        "when shown"
     ),
     "lessor_name": "Lessor name on lease agreement",
     "monthly_payment": "Monthly lease payment",

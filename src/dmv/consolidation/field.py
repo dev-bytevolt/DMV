@@ -3,6 +3,12 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
+from dmv.consolidation.priority import (
+    has_confirmation,
+    normalize_vin,
+    pick_primary_source_variant,
+    primary_document_type_for_field,
+)
 from dmv.consolidation.rover import rover_consensus, vin_consensus
 
 REVIEW_CONFIDENCE_THRESHOLD = 0.75
@@ -235,11 +241,54 @@ def consolidate_field(
     hypotheses: list[tuple[str, float, str, str]],
     *,
     use_vin: bool = False,
+    field_name: str | None = None,
 ) -> ConsolidatedField | None:
     source_variants = collect_source_variants(hypotheses)
     deduped_variants = collect_variants([(v, c) for v, c, _, _ in hypotheses])
     if not source_variants or not deduped_variants:
         return None
+
+    primary_document_type = (
+        primary_document_type_for_field(field_name) if field_name else None
+    )
+    primary_variant = (
+        pick_primary_source_variant(
+            source_variants,
+            primary_document_type=primary_document_type,
+        )
+        if primary_document_type
+        else None
+    )
+
+    if primary_variant is not None:
+        value = primary_variant.value
+        if use_vin:
+            value = normalize_vin(value) or value
+        other_variants = [
+            variant
+            for variant in source_variants
+            if variant.source_document_type != primary_document_type
+        ]
+        confirmed = has_confirmation(
+            value,
+            other_variants,
+            use_vin=use_vin,
+        )
+        confidence = compute_field_confidence(
+            value,
+            source_variants,
+            unique_variants=deduped_variants,
+        )
+        if confirmed:
+            review_required = False
+        else:
+            review_required = True
+        return ConsolidatedField(
+            value=value,
+            variants=source_variants,
+            confidence=confidence,
+            review_required=review_required,
+        )
 
     vote_hypotheses = [(v.value, v.confidence) for v in source_variants]
 
