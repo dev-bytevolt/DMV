@@ -12,7 +12,7 @@ WHITE = (1, 1, 1)
 
 # Stamp between form title (~385) and state seal (~551).
 # Equal white pad around a black frame that stays clear of the seal.
-_WHITE_BORDER = 7.0
+_WHITE_BORDER = 4.9
 _BLACK_LEFT = 397.0
 _BLACK_RIGHT = 526.0
 _STAMP_LEFT = _BLACK_LEFT - _WHITE_BORDER
@@ -53,11 +53,9 @@ def apply_uta_tax_stamp(
 
 def _draw_box(page: fitz.Page, outer: fitz.Rect) -> fitz.Rect:
     """White outer margin with an inset black border (equal on all sides)."""
-    # Opaque white pad. Light gray hairline marks the outer edge so the white
-    # border is visible even on a white page background.
     shape = page.new_shape()
     shape.draw_rect(outer)
-    shape.finish(color=(0.75, 0.75, 0.75), fill=WHITE, width=0.6)
+    shape.finish(color=WHITE, fill=WHITE, width=0)
     shape.commit()
     inner = fitz.Rect(
         outer.x0 + _WHITE_BORDER,
@@ -67,7 +65,7 @@ def _draw_box(page: fitz.Page, outer: fitz.Rect) -> fitz.Rect:
     )
     shape = page.new_shape()
     shape.draw_rect(inner)
-    shape.finish(color=BLACK, fill=WHITE, width=1.25)
+    shape.finish(color=BLACK, fill=WHITE, width=0.625)
     shape.commit()
     return inner
 
