@@ -18,29 +18,9 @@ def build_extraction_prompt(
     type_label = type_labels.get(document_type, document_type)
     allowed_fields = fields_for_document_type(document_type)
     guidance = field_guidance_for_document_type(document_type)
-    uses_full_field_list = document_type not in {
+    is_catch_all = document_type == "other" or document_type not in {
         item.type_id for item in DOCUMENT_TYPES if item.type_id != "other"
-    } or document_type == "other"
-    # Unknown / other keep the full list; known types use narrowed profiles.
-    uses_full_field_list = (
-        document_type == "other"
-        or document_type not in {
-            "cover_letter",
-            "universal_title_application",
-            "vehicle_registration_application",
-            "dealership_supplemental_title_form",
-            "manufacturer_certificate",
-            "retail_certificate_of_sale",
-            "odometer_disclosure",
-            "limited_power_of_attorney",
-            "lease_agreement",
-            "insurance_card",
-            "driver_license",
-            "dealer_invoice",
-            "check_payment",
-            "lessor_lender_paperwork",
-        }
-    )
+    }
 
     lines = [
         "You are extracting structured data from a scanned DMV-related document.",
@@ -61,10 +41,11 @@ def build_extraction_prompt(
         "",
     ]
 
-    if uses_full_field_list:
+    if is_catch_all:
         lines.append(
-            "This document type is unrecognized or miscellaneous — search across "
-            "the full canonical field list and use the most specific matching field."
+            "This document type is unrecognized or miscellaneous — extract any "
+            "clearly labeled values that match the allowed fields below, and put "
+            "other labeled values in extra."
         )
         lines.append("")
     else:

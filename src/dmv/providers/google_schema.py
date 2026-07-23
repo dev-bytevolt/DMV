@@ -18,6 +18,12 @@ _DROP_KEYS = frozenset(
         "dependencies",
         "dependentRequired",
         "dependentSchemas",
+        # Gemini response_json_schema is picky; numeric bounds have caused
+        # INVALID_ARGUMENT on large nested extraction schemas.
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
     }
 )
 

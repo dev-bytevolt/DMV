@@ -6,7 +6,6 @@ import fitz
 import numpy as np
 import pytest
 
-from dmv.extraction.fields import CANONICAL_EXTRACTION_FIELDS
 from dmv.extraction.schemas import (
     EXTRACTION_JSON_SCHEMA,
     FIELD_VALUE_SCHEMA,
@@ -44,14 +43,18 @@ def _make_image_heavy_pdf(
     doc.close()
 
 
-def test_extraction_json_schema_includes_canonical_fields() -> None:
+def test_extraction_json_schema_includes_other_profile_fields() -> None:
+    from dmv.extraction.profiles import fields_for_document_type
+
     properties = EXTRACTION_JSON_SCHEMA["properties"]
-    for field in CANONICAL_EXTRACTION_FIELDS:
+    other_fields = fields_for_document_type("other")
+    for field in other_fields:
         assert field in properties
     assert "extra" in properties
+    assert "driver_full_name" not in properties
     required = EXTRACTION_JSON_SCHEMA["required"]
     assert required == ["document_type", "source_document_name"]
-    for field in CANONICAL_EXTRACTION_FIELDS:
+    for field in other_fields:
         assert field not in required
     assert "extra" not in required
     assert EXTRACTION_JSON_SCHEMA["properties"]["vehicle_vin"] == FIELD_VALUE_SCHEMA

@@ -323,7 +323,36 @@ EXTRACTION_FIELDS_BY_DOCUMENT_TYPE: dict[str, tuple[str, ...]] = {
             "vehicle_epa_mpg_rating",
         ),
     ),
-    # "other" intentionally omitted — falls back to full canonical list.
+    # Catch-all for unrecognized docs (e.g. deal checklists). Keep bounded —
+    # Vertex rejects the full ~120-field nested schema as INVALID_ARGUMENT.
+    "other": _fields(
+        _VEHICLE_CORE,
+        _OWNER,
+        _LESSEE,
+        _DEALERSHIP,
+        (
+            "customer_name",
+            "buyer_name",
+            "seller_name",
+            "entity_name",
+            "document_date",
+            "phone_number",
+            "email_address",
+            "purchase_price",
+            "sales_tax",
+            "sales_tax_amount",
+            "lfis_amount",
+            "plate_type",
+            "plate_number",
+            "lien_holder",
+            "insurance_company",
+            "insurance_policy_number",
+            "federal_tax_id",
+            "federal_tax_identification_number",
+            "vehicle_epa_mpg_rating",
+            "gross_sales_lease_price",
+        ),
+    ),
 }
 
 DOCUMENT_TYPE_FIELD_GUIDANCE: dict[str, tuple[str, ...]] = {
@@ -407,18 +436,23 @@ DOCUMENT_TYPE_FIELD_GUIDANCE: dict[str, tuple[str, ...]] = {
         "Extract dealership, vehicle, price, and surcharge fields.",
         "Use owner_* only when an owner section is clearly labeled.",
     ),
+    "other": (
+        "Extract any clearly labeled vehicle, owner, lessee, dealership, or "
+        "transaction fields from the allowed list.",
+        "Put remaining labeled values in extra as {field_name, value, confidence}.",
+    ),
 }
 
 
 def fields_for_document_type(document_type: str) -> tuple[str, ...]:
     """Return allowed canonical fields for a document type.
 
-    Unknown types and ``other`` keep the full canonical field list so extraction
-    can still search broadly when the document is unrecognized.
+    Unknown types reuse the bounded ``other`` profile. The full canonical list
+    is too large for Vertex structured-output schemas (400 INVALID_ARGUMENT).
     """
     if document_type in EXTRACTION_FIELDS_BY_DOCUMENT_TYPE:
         return EXTRACTION_FIELDS_BY_DOCUMENT_TYPE[document_type]
-    return CANONICAL_EXTRACTION_FIELDS
+    return EXTRACTION_FIELDS_BY_DOCUMENT_TYPE["other"]
 
 
 def field_guidance_for_document_type(document_type: str) -> tuple[str, ...]:

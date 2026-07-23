@@ -32,9 +32,16 @@ def test_fields_for_document_type_narrows_known_types() -> None:
     assert "owner_full_name" not in lease_fields
 
 
-def test_fields_for_other_and_unknown_use_full_canonical_list() -> None:
-    assert fields_for_document_type("other") == CANONICAL_EXTRACTION_FIELDS
-    assert fields_for_document_type("totally_unknown_type") == CANONICAL_EXTRACTION_FIELDS
+def test_fields_for_other_and_unknown_use_bounded_other_profile() -> None:
+    other_fields = fields_for_document_type("other")
+    unknown_fields = fields_for_document_type("totally_unknown_type")
+    assert other_fields == EXTRACTION_FIELDS_BY_DOCUMENT_TYPE["other"]
+    assert unknown_fields == other_fields
+    # Bounded so Vertex structured output accepts the schema.
+    assert len(other_fields) < len(CANONICAL_EXTRACTION_FIELDS)
+    assert "vehicle_vin" in other_fields
+    assert "owner_full_name" in other_fields
+    assert "extra" not in other_fields
 
 
 def test_every_profile_field_is_canonical() -> None:
@@ -54,8 +61,10 @@ def test_build_extraction_json_schema_is_type_specific() -> None:
     assert driver_schema["required"] == ["document_type", "source_document_name"]
 
     other_schema = build_extraction_json_schema("other")
-    for field in CANONICAL_EXTRACTION_FIELDS:
+    other_fields = fields_for_document_type("other")
+    for field in other_fields:
         assert field in other_schema["properties"]
+    assert "driver_full_name" not in other_schema["properties"]
     assert other_schema == EXTRACTION_JSON_SCHEMA
 
 
@@ -73,16 +82,17 @@ def test_build_extraction_prompt_lists_only_allowed_fields() -> None:
     assert "Never output a field that is not in the allowed list" in prompt
 
 
-def test_build_extraction_prompt_for_other_uses_full_list() -> None:
+def test_build_extraction_prompt_for_other_uses_bounded_list() -> None:
     prompt = build_extraction_prompt(
         document_type="other",
         document_name="Misc Form",
         source_filename="Misc.pdf",
     )
-    assert "full canonical field list" in prompt
+    assert "unrecognized or miscellaneous" in prompt
     assert "vehicle_vin" in prompt
     assert "owner_full_name" in prompt
-    assert "driver_full_name" in prompt
+    assert "driver_full_name" not in prompt
+    assert "full canonical field list" not in prompt
 
 
 def test_normalize_extraction_payload_drops_disallowed_fields() -> None:
@@ -99,9 +109,6 @@ def test_normalize_extraction_payload_drops_disallowed_fields() -> None:
     assert "owner_full_name" not in normalized
 
 
-def test_profiles_cover_known_document_types_except_other() -> None:
+def test_profiles_cover_known_document_types() -> None:
     for type_id in DOCUMENT_TYPE_IDS:
-        if type_id == "other":
-            assert type_id not in EXTRACTION_FIELDS_BY_DOCUMENT_TYPE
-            continue
         assert type_id in EXTRACTION_FIELDS_BY_DOCUMENT_TYPE

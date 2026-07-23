@@ -18,7 +18,7 @@ def test_openai_schema_to_google_strips_additional_properties() -> None:
     assert document_item["properties"]["type"]["enum"]
 
 
-def test_openai_schema_to_google_preserves_constraints_and_nested_objects() -> None:
+def test_openai_schema_to_google_strips_constraints_and_nested_objects() -> None:
     openai_schema = build_extraction_json_schema("driver_license")
     converted = openai_schema_to_google(openai_schema)
 
@@ -27,8 +27,8 @@ def test_openai_schema_to_google_preserves_constraints_and_nested_objects() -> N
     field = converted["properties"]["driver_full_name"]
     assert field["type"] == "object"
     assert "additionalProperties" not in field
-    assert field["properties"]["confidence"]["minimum"] == 0
-    assert field["properties"]["confidence"]["maximum"] == 1
+    assert "minimum" not in field["properties"]["confidence"]
+    assert "maximum" not in field["properties"]["confidence"]
     assert field["propertyOrdering"] == ["value", "confidence"]
 
 
@@ -47,5 +47,6 @@ def test_openai_schema_to_google_normalizes_uppercase_types() -> None:
     assert converted["type"] == "object"
     assert converted["properties"]["name"]["type"] == "string"
     assert converted["properties"]["count"]["type"] == "integer"
+    assert "minimum" not in converted["properties"]["count"]
     assert converted["propertyOrdering"] == ["name", "count"]
     assert "additionalProperties" not in converted
