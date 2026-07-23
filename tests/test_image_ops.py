@@ -96,21 +96,48 @@ def test_upright_page_if_sideways_keeps_already_upright_form() -> None:
     assert upright.shape == page.shape
 
 
-def test_full_page_form_mode_rotates_sideways_dealer_invoice_like_page() -> None:
+def test_full_page_form_mode_does_not_flip_already_upright_invoice() -> None:
+    """Dense full-page forms must not be inverted by top-ink 180° heuristics."""
+    from dmv.preprocess.image_ops import upright_page_if_upside_down
+
     page = np.full((1100, 850, 3), 255, dtype=np.uint8)
-    for x in range(80, 780, 24):
-        cv2.line(page, (x, 50), (x, 1050), (0, 0, 0), 2)
-    page[40:220, 80:780] = 30
+    for y in range(80, 1020, 24):
+        cv2.line(page, (60, y), (790, y), (0, 0, 0), 2)
+    # Header near top, denser settlement block lower-right (typical invoice).
+    page[60:160, 60:790] = 40
+    page[700:980, 480:780] = 50
+
+    assert np.array_equal(upright_page_if_upside_down(page), page)
 
     processed = preprocess_page_image(
         page,
         PreprocessOptions(dpi=120),
         mode=PreprocessMode.FULL_PAGE_FORM,
     )
-    assert processed.shape[1] >= processed.shape[0]
+    # Still portrait (no mistaken quarter-turn / 180 that yields landscape).
+    assert processed.shape[0] >= processed.shape[1]
 
 
-def test_default_mode_does_not_quarter_turn_sideways_pages(monkeypatch) -> None:
+def test_upright_page_if_upside_down_fixes_localized_card_after_quarter_turn() -> None:
+    from dmv.preprocess.image_ops import upright_page_if_upside_down
+
+    # Mostly empty landscape page with a registration-like slip at the bottom
+    # (upside-down after a bad quarter turn).
+    page = np.full((850, 1100, 3), 255, dtype=np.uint8)
+    page[520:780, 200:900] = 230
+    page[540:600, 220:880] = 30  # header band on the slip
+    page[620:760, 220:880] = 80
+
+    upright = upright_page_if_upside_down(page)
+    # Content should move toward the top half.
+    gray = cv2.cvtColor(upright, cv2.COLOR_BGR2GRAY)
+    ink = gray < 180
+    top = float(np.mean(ink[: upright.shape[0] // 2]))
+    bottom = float(np.mean(ink[upright.shape[0] // 2 :]))
+    assert top > bottom
+
+
+def test_default_mode_quarter_turns_sideways_pages(monkeypatch) -> None:
     calls: list[bool] = []
 
     def tracking_upright(image):
@@ -126,19 +153,25 @@ def test_default_mode_does_not_quarter_turn_sideways_pages(monkeypatch) -> None:
         cv2.line(page, (x, 50), (x, 1050), (0, 0, 0), 2)
 
     preprocess_page_image(page, PreprocessOptions(dpi=120), mode=PreprocessMode.DEFAULT)
-    assert calls == []
+    assert calls == [True]
 
 
-def test_embedded_card_mode_does_not_quarter_turn(monkeypatch) -> None:
-    calls: list[bool] = []
+def test_embedded_card_mode_tries_rotated_page_variants(monkeypatch) -> None:
+    variants_seen: list[tuple[int, int]] = []
 
-    def tracking_upright(image):
-        calls.append(True)
-        return image
+    real_variants = __import__(
+        "dmv.preprocess.image_ops", fromlist=["_embedded_card_page_variants"]
+    )._embedded_card_page_variants
+
+    def tracking_variants(image):
+        variants = real_variants(image)
+        for variant in variants:
+            variants_seen.append(variant.shape[:2])
+        return variants
 
     monkeypatch.setattr(
-        "dmv.preprocess.image_ops.upright_page_if_sideways",
-        tracking_upright,
+        "dmv.preprocess.image_ops._embedded_card_page_variants",
+        tracking_variants,
     )
     monkeypatch.setattr(
         "dmv.preprocess.image_ops._extract_embedded_card",
@@ -149,7 +182,7 @@ def test_embedded_card_mode_does_not_quarter_turn(monkeypatch) -> None:
         PreprocessOptions(),
         mode=PreprocessMode.EMBEDDED_CARD,
     )
-    assert calls == []
+    assert len(variants_seen) == 4
 
 
 def test_embedded_card_mode_uses_card_detection(monkeypatch) -> None:

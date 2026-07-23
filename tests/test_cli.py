@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from dmv.categorization import FileProcessingResult, RunSummary
+from dmv.categorization import FileProcessingFailure, FileProcessingResult, RunSummary
 from dmv.cli import main, print_results
 from dmv.config import Settings
 from dmv.consolidation.service import ConsolidationResult, CONSOLIDATED_DATA_FILENAME
@@ -156,6 +156,7 @@ def test_print_results_reports_complete_coverage(
 ) -> None:
     summary = RunSummary(
         results=[_make_result(sample_pdf, sample_classification, tmp_path)],
+        failures=[],
         total_elapsed_seconds=1.5,
     )
 
@@ -235,7 +236,7 @@ def test_print_results_reports_total_stats_after_all_steps(
         output_packet=_empty_output_packet(tmp_path),
         excluded_documents=[],
     )
-    summary = RunSummary(results=[result], total_elapsed_seconds=6.0)
+    summary = RunSummary(results=[result], failures=[], total_elapsed_seconds=6.0)
 
     print_results(summary, cli_settings)
     output = capsys.readouterr().out
@@ -306,7 +307,7 @@ def test_print_results_reports_debug_exclusions(
         preprocess_dpi=200,
         debug_mode=True,
     )
-    summary = RunSummary(results=[result], total_elapsed_seconds=1.0)
+    summary = RunSummary(results=[result], failures=[], total_elapsed_seconds=1.0)
 
     print_results(summary, settings)
     output = capsys.readouterr().out
@@ -343,6 +344,7 @@ def test_print_results_returns_error_for_incomplete_coverage(
                 validation=validation,
             )
         ],
+        failures=[],
         total_elapsed_seconds=1.5,
     )
 
@@ -386,6 +388,7 @@ def test_print_results_returns_error_for_contiguity_issues(
                 validation=validation,
             )
         ],
+        failures=[],
         total_elapsed_seconds=1.5,
     )
 
@@ -397,8 +400,47 @@ def test_print_results_returns_error_for_contiguity_issues(
     assert "spans other documents on pages: 21, 22" in output
 
 
+def test_print_results_lists_failed_input_files(
+    sample_pdf: Path,
+    sample_classification,
+    tmp_path: Path,
+    capsys,
+    cli_settings: Settings,
+) -> None:
+    failed = tmp_path / "ROMANO, GINA M - NJ LEASE - LEGEND NISSAN.pdf"
+    failed.write_bytes(b"%PDF")
+    summary = RunSummary(
+        results=[_make_result(sample_pdf, sample_classification, tmp_path)],
+        failures=[
+            FileProcessingFailure(
+                source_pdf=failed,
+                error="RemoteProtocolError: Server disconnected",
+            )
+        ],
+        total_elapsed_seconds=2.0,
+        skipped=(),
+    )
+
+    exit_code = print_results(summary, cli_settings)
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Failed (1):" in output
+    assert "ROMANO, GINA M - NJ LEASE - LEGEND NISSAN.pdf" in output
+    assert "Server disconnected" in output
+    assert "failed: 1" in output
+
+
+def test_build_parser_accepts_skip_processed() -> None:
+    from dmv.cli import build_parser
+
+    args = build_parser().parse_args(["--skip-processed", "a.pdf"])
+    assert args.skip_processed is True
+    assert args.pdf_files[0].name == "a.pdf"
+
+
 def test_cli_main_integration(monkeypatch, sample_pdf: Path, tmp_path: Path) -> None:
-    async def fake_run_async(pdf_files, env_file):
+    async def fake_run_async(pdf_files, env_file, *, skip_processed: bool = False):
         from dmv.categorization import CategorizationService
         from dmv.cli import print_results
         from dmv.config import Settings
@@ -442,7 +484,10 @@ def test_cli_main_integration(monkeypatch, sample_pdf: Path, tmp_path: Path) -> 
                 provider=FakeExtractionProvider(),
             ),
         )
-        summary = await service.process_files(pdf_files)
+        summary = await service.process_files(
+            pdf_files,
+            skip_processed=skip_processed,
+        )
         return print_results(summary, settings)
 
     monkeypatch.setattr("dmv.cli.run_async", fake_run_async)

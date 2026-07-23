@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from dmv.preprocess.modes import PreprocessMode
+from dmv.preprocess.verification import _looks_overcut, verify_corrected_page
 
 
 @dataclass(frozen=True)
@@ -23,9 +24,9 @@ class PreprocessOptions:
     min_card_aspect_ratio: float = 1.15
     max_card_aspect_ratio: float = 2.1
     max_card_perspective_distortion: float = 0.12
-    card_quad_padding_ratio: float = 0.20
+    card_quad_padding_ratio: float = 0.28
     min_document_boundary_area_ratio: float = 0.30
-    max_document_boundary_area_ratio: float = 0.92
+    max_document_boundary_area_ratio: float = 0.72
     max_deskew_passes: int = 4
 
 
@@ -39,20 +40,13 @@ def preprocess_page_image(
         raise ValueError("Expected a BGR color image")
 
     if mode is PreprocessMode.EMBEDDED_CARD:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        card = _extract_embedded_card(image, gray, options)
-        if card is not None:
-            return card
-
-        working = deskew_image(image, options)
-        gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
-        return crop_to_content(working, gray, options)
+        return _preprocess_embedded_card_page(image, options)
 
     working = image
-    if mode is PreprocessMode.FULL_PAGE_FORM:
-        # Deskew only corrects small angles; landscape forms scanned sideways
-        # need a quarter turn. Keep this out of card/default paths.
-        working = upright_page_if_sideways(working)
+    # Landscape cards/forms scanned sideways need a quarter turn before deskew.
+    # 180° correction runs only after that quarter turn — never on already-upright
+    # full-page forms (top-ink heuristics falsely invert invoices/POAs/leases).
+    working = upright_page_if_sideways(working)
 
     working = deskew_image(working, options)
     gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
@@ -60,16 +54,171 @@ def preprocess_page_image(
     if mode is PreprocessMode.FULL_PAGE_FORM:
         boundary = try_document_boundary_warp(working, gray, options)
         if boundary is not None:
-            working = boundary
-            gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
-        return crop_to_page(working, gray, options)
+            candidate = crop_to_page(
+                boundary,
+                cv2.cvtColor(boundary, cv2.COLOR_BGR2GRAY),
+                options,
+            )
+            if _accept_correction(image, candidate, mode):
+                return candidate
+        candidate = crop_to_page(working, gray, options)
+        return _accepted_or_original(image, candidate, mode)
 
     perspective = try_page_perspective_correction(working, gray, options)
     if perspective is not None:
-        working = perspective
-        gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
+        candidate = crop_to_content(
+            perspective,
+            cv2.cvtColor(perspective, cv2.COLOR_BGR2GRAY),
+            options,
+        )
+        if _accept_correction(image, candidate, mode):
+            return candidate
 
-    return crop_to_content(working, gray, options)
+    candidate = crop_to_content(working, gray, options)
+    return _accepted_or_original(image, candidate, mode)
+
+
+def _preprocess_embedded_card_page(
+    image: np.ndarray,
+    options: PreprocessOptions,
+) -> np.ndarray:
+    # Try extraction on several page orientations. Wallet photos on dark
+    # backgrounds often fool full-page Hough into an unnecessary quarter turn,
+    # which makes an already-upright card sideways.
+    best_card: np.ndarray | None = None
+    best_score = float("-inf")
+    # Prefer the original page first; only spend time on rotations when needed.
+    variants = _embedded_card_page_variants(image)
+    for index, page in enumerate(variants):
+        gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+        card = _extract_embedded_card(page, gray, options)
+        if card is None:
+            continue
+        if not _accept_correction(image, card, PreprocessMode.EMBEDDED_CARD):
+            continue
+        score = _card_orientation_score(card) + (
+            card.shape[0] * card.shape[1]
+        ) / 500_000.0
+        if score <= best_score:
+            continue
+        best_score = score
+        best_card = card
+        # A strong upright hit on the original page is good enough.
+        if index == 0 and score >= 8.0:
+            break
+
+    if best_card is not None:
+        return best_card
+
+    # Prefer under-correction over clipping ID fields / portraits. For wallet
+    # photos on dark textured beds, leave the original page when extraction
+    # fails — full-page Hough often invents a bad quarter turn.
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if _page_looks_like_embedded_photo(gray):
+        return image
+
+    oriented = _best_page_orientation_for_card(image)
+    working = deskew_image(oriented, options)
+    gentle = PreprocessOptions(
+        dpi=options.dpi,
+        padding_ratio=max(options.padding_ratio, 0.05),
+        min_padding_pixels=max(options.min_padding_pixels, 32),
+        min_retained_area_ratio=0.92,
+        min_crop_margin_ratio=options.min_crop_margin_ratio,
+        max_skew_degrees=options.max_skew_degrees,
+    )
+    gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
+    candidate = crop_to_content(working, gray, gentle)
+    if _accept_correction(image, candidate, PreprocessMode.EMBEDDED_CARD):
+        return candidate
+    if _accept_correction(image, working, PreprocessMode.EMBEDDED_CARD):
+        return working
+    if _accept_correction(image, oriented, PreprocessMode.EMBEDDED_CARD):
+        return oriented
+    return image
+
+
+def _embedded_card_page_variants(image: np.ndarray) -> list[np.ndarray]:
+    # CW and CCW share the same HxW for rectangular pages but are different
+    # images — never dedupe by shape alone.
+    return [
+        image,
+        cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE),
+        cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE),
+        cv2.rotate(image, cv2.ROTATE_180),
+    ]
+
+
+def _best_page_orientation_for_card(image: np.ndarray) -> np.ndarray:
+    """Pick a page rotation where ID-card content looks upright and landscape.
+
+    Prefer keeping the original when no rotation clearly improves the content
+    bounding-box aspect and axis alignment — avoids false quarter-turns on
+    textured wallet backgrounds.
+    """
+    best = image
+    best_score = _card_page_orientation_score(image)
+    threshold = best_score + 0.75
+    for variant in _embedded_card_page_variants(image)[1:]:
+        score = _card_page_orientation_score(variant)
+        if score > threshold and score > best_score:
+            best_score = score
+            best = variant
+            threshold = best_score
+    return best
+
+
+def _card_page_orientation_score(image: np.ndarray) -> float:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    binary = _content_binary(gray)
+    coords = np.column_stack(np.where(binary > 0))
+    if len(coords) == 0:
+        return float("-inf")
+
+    y0, x0 = coords.min(axis=0)
+    y1, x1 = coords.max(axis=0)
+    # Focus scoring on the content bbox, not textured full-page noise.
+    roi = gray[y0 : y1 + 1, x0 : x1 + 1]
+    if roi.size == 0:
+        return float("-inf")
+
+    horizontal, vertical = _hough_axis_lengths(roi)
+    total = horizontal + vertical + 1.0
+    axis = horizontal / total
+
+    height = max(int(y1 - y0), 1)
+    width = max(int(x1 - x0), 1)
+    aspect = max(width, height) / min(width, height)
+    landscape_bonus = 1.2 if width >= int(height * 1.05) else 0.0
+    aspect_fit = 1.0 - min(abs(aspect - 1.58) / 0.8, 1.0)
+    page_fill = (height * width) / max(image.shape[0] * image.shape[1], 1)
+    compact_bonus = 0.8 if page_fill < 0.55 else 0.0
+    return axis * 5.0 + aspect_fit * 3.0 + landscape_bonus + compact_bonus
+
+
+def _accept_correction(
+    original: np.ndarray,
+    corrected: np.ndarray,
+    mode: PreprocessMode,
+) -> bool:
+    original_area = max(original.shape[0] * original.shape[1], 1)
+    corrected_area = corrected.shape[0] * corrected.shape[1]
+    # Full-page orientation fixes are never "overcut" — only reject if still sideways.
+    if corrected_area / original_area >= 0.85:
+        from dmv.preprocess.verification import _looks_sideways
+
+        return not _looks_sideways(corrected)
+    return verify_corrected_page(original, corrected, mode=mode).ok
+
+
+def _accepted_or_original(
+    original: np.ndarray,
+    corrected: np.ndarray,
+    mode: PreprocessMode,
+) -> np.ndarray:
+    if _accept_correction(original, corrected, mode):
+        return corrected
+    return original
 
 
 def bgr_to_jpeg_bytes(image: np.ndarray, *, quality: int = 85) -> bytes:
@@ -137,7 +286,11 @@ def _pick_best_embedded_card(
         deskewed = _upright_card_if_upside_down(
             deskew_image(_normalize_card_orientation(candidate), card_options)
         )
-        deskewed = _refine_embedded_card_crop(deskewed, options)
+        refined = _refine_embedded_card_crop(deskewed, options)
+        # Prefer tightening only when it does not clip card content into borders.
+        if not _card_crop_looks_overcut(refined):
+            deskewed = refined
+
         deskewed_gray = cv2.cvtColor(deskewed, cv2.COLOR_BGR2GRAY)
         if not _is_balanced_card_crop(deskewed_gray):
             continue
@@ -159,10 +312,12 @@ def _pick_best_embedded_card(
         aspect_penalty = abs(aspect_ratio - 1.58) * 14.0
         if aspect_ratio < 1.25:
             aspect_penalty += 8.0
+        overcut_penalty = 12.0 if _card_crop_looks_overcut(deskewed) else 0.0
 
         score = (
             -residual_skew * 10.0
             - aspect_penalty
+            - overcut_penalty
             + orientation_bonus * 2.0
             + mean_brightness * 0.01
         )
@@ -192,7 +347,18 @@ def _refine_embedded_card_crop(
 ) -> np.ndarray:
     """Tighten a card crop without leaving the embedded-card pipeline."""
     working = _tighten_wallet_card_crop(image, options)
-    return _trim_embedded_card_margins(working)
+    trimmed = _trim_embedded_card_margins(working)
+    # Never return a tighter crop that clips readable card content.
+    if not _card_crop_looks_overcut(trimmed):
+        return trimmed
+    if not _card_crop_looks_overcut(working):
+        return working
+    return image
+
+
+def _card_crop_looks_overcut(image: np.ndarray) -> bool:
+    return _looks_overcut(image, mode=PreprocessMode.EMBEDDED_CARD)
+
 
 
 def deskew_image(image: np.ndarray, options: PreprocessOptions) -> np.ndarray:
@@ -378,20 +544,41 @@ def page_needs_quarter_turn(gray: np.ndarray) -> bool:
 def _page_upright_score(image: np.ndarray) -> float:
     """Higher score means form structure looks upright (not upside-down).
 
-    After a ±90° choice, both candidates have horizontal ruling. Dealer invoices
-    and similar full-page forms typically keep denser tables/settlement columns
-    on the right when upright; top-ink bias is unreliable because fine print and
-    totals at the bottom can outweigh the header.
+    After a ±90° choice, both candidates have horizontal ruling. Full-page forms
+    (invoices, POAs, leases) typically keep denser settlement/table columns on
+    the right when upright. Top-ink / placement bias is only safe for localized
+    cards on a large scanner bed — on dense full pages it falsely prefers a
+    180° flip because signatures and fine print sit near the bottom.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     horizontal, vertical = _hough_axis_lengths(gray)
-    axis_score = horizontal / (vertical + 1.0)
+    total = horizontal + vertical + 1.0
+    axis_score = 8.0 * (horizontal / total)
 
     ink = gray < 180
-    width = gray.shape[1]
+    height, width = gray.shape[:2]
     left_half = float(np.mean(ink[:, : max(width // 2, 1)]))
     right_half = float(np.mean(ink[:, width // 2 :]))
     right_bias = right_half - left_half
+
+    row_hits = np.where(ink.any(axis=1))[0]
+    if row_hits.size == 0:
+        return axis_score + 20.0 * right_bias
+
+    y0 = int(row_hits[0])
+    y1 = int(row_hits[-1])
+    content_height = max(y1 - y0 + 1, 1)
+    page_fill = content_height / max(height, 1)
+
+    # Localized slip/card on a mostly empty page (e.g. registration card).
+    if page_fill < 0.55:
+        top_third = float(np.mean(ink[: max(height // 3, 1), :]))
+        bottom_third = float(np.mean(ink[2 * height // 3 :, :]))
+        top_bias = top_third - bottom_third
+        center_y = float(row_hits.mean()) / max(height - 1, 1)
+        placement = 0.5 - center_y
+        return axis_score + 8.0 * right_bias + 12.0 * top_bias + 24.0 * placement
+
     return axis_score + 20.0 * right_bias
 
 
@@ -399,8 +586,7 @@ def upright_page_if_sideways(image: np.ndarray) -> np.ndarray:
     """Rotate a page by ±90° when content appears sideways.
 
     Deskew only handles small angles; scanned landscape forms on portrait pages
-    need a quarter turn before further preprocessing. Only used for full-page
-    form mode — not driver licenses or other embedded-card pages.
+    need a quarter turn before further preprocessing.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if not page_needs_quarter_turn(gray):
@@ -410,7 +596,29 @@ def upright_page_if_sideways(image: np.ndarray) -> np.ndarray:
         cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE),
         cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE),
     )
-    return max(candidates, key=_page_upright_score)
+    best = max(candidates, key=_page_upright_score)
+    return upright_page_if_upside_down(best)
+
+
+def upright_page_if_upside_down(image: np.ndarray) -> np.ndarray:
+    """Flip 180° after a quarter-turn when the page is clearly inverted.
+
+    Only used as a follow-up to ``upright_page_if_sideways``. Requires a clear
+    score margin so dense full-page forms are not flipped on weak cues.
+    """
+    flipped = cv2.rotate(image, cv2.ROTATE_180)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    ink = gray < 180
+    row_hits = np.where(ink.any(axis=1))[0]
+    page_fill = 1.0
+    if row_hits.size > 0:
+        page_fill = (int(row_hits[-1]) - int(row_hits[0]) + 1) / max(gray.shape[0], 1)
+    # Full-page forms need a stronger signal; localized cards can use 0.75.
+    margin = 0.75 if page_fill < 0.55 else 2.0
+    if _page_upright_score(flipped) > _page_upright_score(image) + margin:
+        return flipped
+    return image
+
 
 
 def try_page_perspective_correction(
@@ -782,25 +990,26 @@ def _tighten_wallet_card_crop(
     band_height = max(int(height * 0.06), 4)
     header_y = 0
     header_dark = 0.0
-    for y in range(int(height * 0.04), int(height * 0.72), 2):
+    for y in range(int(height * 0.02), int(height * 0.35), 2):
         dark = float(np.mean(gray[y : y + band_height, :] < 100))
         if dark > 0.12 and dark > header_dark:
             header_dark = dark
             header_y = y
 
-    if header_y <= 0:
+    # Dark portrait blocks mid-card are not headers — never crop from there.
+    if header_y <= 0 or header_y > int(height * 0.14):
         return image
 
-    pad = max(options.min_padding_pixels, 16)
-    top = max(0, header_y - int(height * 0.08))
+    pad = max(options.min_padding_pixels, 24)
+    top = max(0, header_y - int(height * 0.10))
     edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 40, 120)
     row_edges = edges.sum(axis=1)
     col_edges = edges.sum(axis=0)
     if row_edges.max() <= 0 or col_edges.max() <= 0:
         return image
 
-    rows = np.where(row_edges > row_edges.max() * 0.10)[0]
-    cols = np.where(col_edges > col_edges.max() * 0.10)[0]
+    rows = np.where(row_edges > row_edges.max() * 0.08)[0]
+    cols = np.where(col_edges > col_edges.max() * 0.08)[0]
     if rows.size == 0 or cols.size == 0:
         return image
 
@@ -819,7 +1028,9 @@ def _tighten_wallet_card_crop(
         return image
     if (bottom - top) * (right - left) > height * width * 0.96:
         return image
-    return cropped
+    if not _card_crop_looks_overcut(cropped):
+        return cropped
+    return image
 
 
 def _is_balanced_card_crop(gray: np.ndarray) -> bool:

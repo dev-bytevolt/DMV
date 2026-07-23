@@ -45,6 +45,11 @@ class Settings:
     vertex_model: str = "gemini-3.1-pro-preview"
     vertex_service_account_json: Path | None = None
     blanks_dir: Path = Path("artifacts/blanks")
+    # Cap concurrent model calls (classify + extract) process-wide. Large PDF
+    # uploads to Vertex often drop connections when many run at once.
+    ai_max_concurrency: int = 2
+    # google-genai HttpOptions.timeout is milliseconds.
+    vertex_http_timeout_ms: int = 600_000
 
     @property
     def active_model(self) -> str:
@@ -90,4 +95,8 @@ def load_settings(env_path: Path | None = None) -> Settings:
         or "gemini-3.1-pro-preview",
         vertex_service_account_json=_optional_path("VERTEX_SERVICE_ACCOUNT_JSON"),
         blanks_dir=Path(os.getenv("BLANKS_DIR", "artifacts/blanks")),
+        ai_max_concurrency=max(1, int(os.getenv("AI_MAX_CONCURRENCY", "2"))),
+        vertex_http_timeout_ms=max(
+            30_000, int(os.getenv("VERTEX_HTTP_TIMEOUT_MS", "600000"))
+        ),
     )

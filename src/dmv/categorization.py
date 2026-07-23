@@ -9,10 +9,11 @@ from pathlib import Path
 from dmv.classification_normalize import is_blank_page_document, normalize_classification
 from dmv.classification_recovery import recover_misclassified_empty_pages
 from dmv.config import Settings
-from dmv.cost import estimate_cost
 from dmv.consolidation.service import ConsolidationResult, consolidate_extractions
+from dmv.cost import estimate_cost
 from dmv.debug_exclusions import ExcludedDocument, identify_debug_exclusions
 from dmv.extraction.service import ExtractionResult, ExtractionService
+from dmv.logging_config import format_error
 from dmv.models.classification import ClassificationResult
 from dmv.models.usage import ProcessingStats, TokenUsage
 from dmv.output.service import OutputPacketResult, build_output_packet
@@ -45,9 +46,26 @@ class FileProcessingResult:
 
 
 @dataclass(frozen=True)
+class FileProcessingFailure:
+    source_pdf: Path
+    error: str
+
+
+class FileProcessingError(Exception):
+    """Raised when every input file failed; carries the first failure path."""
+
+    def __init__(self, source_pdf: Path, cause: BaseException) -> None:
+        self.source_pdf = source_pdf
+        self.cause = cause
+        super().__init__(f"{source_pdf.name}: {cause}")
+
+
+@dataclass(frozen=True)
 class RunSummary:
     results: list[FileProcessingResult]
+    failures: list[FileProcessingFailure]
     total_elapsed_seconds: float
+    skipped: tuple[Path, ...] = ()
 
     @property
     def total_usage(self) -> TokenUsage:
@@ -56,6 +74,15 @@ class RunSummary:
             usage = usage.merge(result.stats.usage)
             usage = usage.merge(result.extraction.stats.usage)
         return usage
+
+
+def artifact_dir_for_pdf(pdf_path: Path, artifacts_dir: Path) -> Path:
+    return artifacts_dir / pdf_path.stem
+
+
+def is_already_processed(pdf_path: Path, artifacts_dir: Path) -> bool:
+    """True when a prior run left a completed ``output.pdf`` for this input."""
+    return (artifact_dir_for_pdf(pdf_path, artifacts_dir) / "output.pdf").is_file()
 
 
 class CategorizationService:
@@ -73,30 +100,115 @@ class CategorizationService:
         )
         self._extraction_service = extraction_service or ExtractionService(settings)
 
-    async def process_files(self, pdf_paths: list[Path]) -> RunSummary:
+    async def process_files(
+        self,
+        pdf_paths: list[Path],
+        *,
+        skip_processed: bool = False,
+    ) -> RunSummary:
         started_at = time.perf_counter()
+        skipped: list[Path] = []
+        pending: list[Path] = []
+        for path in pdf_paths:
+            if skip_processed and is_already_processed(path, self._settings.artifacts_dir):
+                skipped.append(path)
+                logger.info(
+                    "Skipping already processed %s (%s)",
+                    path.name,
+                    artifact_dir_for_pdf(path, self._settings.artifacts_dir),
+                )
+            else:
+                pending.append(path)
+
+        if skipped:
+            logger.info(
+                "Skipping %s already-processed file(s); %s remaining",
+                len(skipped),
+                len(pending),
+            )
+
+        if not pending:
+            return RunSummary(
+                results=[],
+                failures=[],
+                total_elapsed_seconds=time.perf_counter() - started_at,
+                skipped=tuple(skipped),
+            )
+
         semaphore = asyncio.Semaphore(self._settings.worker_pool_size)
 
         async def _run(path: Path) -> FileProcessingResult:
             async with semaphore:
                 return await self.process_file(path)
 
-        results = await asyncio.gather(*(_run(path) for path in pdf_paths))
+        outcomes = await asyncio.gather(
+            *(_run(path) for path in pending),
+            return_exceptions=True,
+        )
+        results: list[FileProcessingResult] = []
+        failures: list[FileProcessingFailure] = []
+        for path, outcome in zip(pending, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                cause = (
+                    outcome.cause
+                    if isinstance(outcome, FileProcessingError)
+                    else outcome
+                )
+                error_text = format_error(cause)
+                logger.error("Failed processing %s: %s", path.name, error_text)
+                failures.append(FileProcessingFailure(source_pdf=path, error=error_text))
+            else:
+                results.append(outcome)
+
+        if failures and not results:
+            first = failures[0]
+            raise FileProcessingError(
+                first.source_pdf,
+                RuntimeError(first.error),
+            )
+        if failures:
+            failed_names = ", ".join(item.source_pdf.name for item in failures)
+            logger.warning(
+                "Completed with %s success(es) and %s failure(s): %s",
+                len(results),
+                len(failures),
+                failed_names,
+            )
+
         return RunSummary(
-            results=list(results),
+            results=results,
+            failures=failures,
             total_elapsed_seconds=time.perf_counter() - started_at,
+            skipped=tuple(skipped),
         )
 
     async def process_file(self, pdf_path: Path) -> FileProcessingResult:
-        if not pdf_path.is_file():
-            raise FileNotFoundError(f"PDF not found: {pdf_path}")
-        if pdf_path.suffix.lower() != ".pdf":
-            raise ValueError(f"Expected a PDF file, got: {pdf_path}")
+        try:
+            if not pdf_path.is_file():
+                raise FileNotFoundError(f"PDF not found: {pdf_path}")
+            if pdf_path.suffix.lower() != ".pdf":
+                raise ValueError(f"Expected a PDF file, got: {pdf_path}")
 
-        started_at = time.perf_counter()
-        outcome = await self._provider.classify_pdf(pdf_path)
-        elapsed_seconds = time.perf_counter() - started_at
+            started_at = time.perf_counter()
+            outcome = await self._provider.classify_pdf(pdf_path)
+            elapsed_seconds = time.perf_counter() - started_at
+            return await self._process_classified(
+                pdf_path,
+                outcome=outcome,
+                classify_elapsed_seconds=elapsed_seconds,
+            )
+        except FileProcessingError:
+            raise
+        except Exception as exc:
+            raise FileProcessingError(pdf_path, exc) from exc
 
+    async def _process_classified(
+        self,
+        pdf_path: Path,
+        *,
+        outcome,
+        classify_elapsed_seconds: float,
+    ) -> FileProcessingResult:
         classification = recover_misclassified_empty_pages(
             pdf_path,
             normalize_classification(outcome.result),
@@ -148,7 +260,7 @@ class CategorizationService:
             debug_mode=self._settings.debug_mode,
         )
         stats = ProcessingStats(
-            elapsed_seconds=elapsed_seconds,
+            elapsed_seconds=classify_elapsed_seconds,
             usage=outcome.usage,
             cost=estimate_cost(outcome.usage, self._settings),
         )

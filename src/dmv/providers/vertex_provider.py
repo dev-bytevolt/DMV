@@ -18,6 +18,7 @@ from dmv.providers.base import (
     ExtractionOutcome,
     ExtractionProvider,
 )
+from dmv.providers.ai_concurrency import ai_concurrency_slot
 from dmv.providers.google_schema import openai_schema_to_google
 from dmv.providers.schemas import CLASSIFICATION_JSON_SCHEMA
 from dmv.providers.usage import parse_vertex_usage
@@ -57,6 +58,7 @@ def _project_id_from_service_account(path: Path) -> str:
 def build_vertex_client(settings: Settings) -> Any:
     """Build a google-genai Client configured for Vertex AI."""
     from google import genai
+    from google.genai import types
 
     if settings.vertex_service_account_json is None:
         raise ValueError(
@@ -73,6 +75,15 @@ def build_vertex_client(settings: Settings) -> Any:
         project=project,
         location=settings.vertex_location,
         credentials=credentials,
+        http_options=types.HttpOptions(
+            timeout=settings.vertex_http_timeout_ms,
+            retry_options=types.HttpRetryOptions(
+                attempts=5,
+                initial_delay=1.0,
+                max_delay=30.0,
+                http_status_codes=[408, 429, 500, 502, 503, 504],
+            ),
+        ),
     )
 
 
@@ -179,11 +190,12 @@ class VertexClassificationProvider(ClassificationProvider):
             )
 
         client = self._ensure_client()
-        return await client.aio.models.generate_content(
-            model=self._settings.vertex_model,
-            contents=contents,
-            config=config,
-        )
+        async with ai_concurrency_slot(self._settings.ai_max_concurrency):
+            return await client.aio.models.generate_content(
+                model=self._settings.vertex_model,
+                contents=contents,
+                config=config,
+            )
 
 
 class VertexExtractionProvider(ExtractionProvider):
@@ -289,8 +301,9 @@ class VertexExtractionProvider(ExtractionProvider):
             )
 
         client = self._ensure_client()
-        return await client.aio.models.generate_content(
-            model=self._settings.vertex_model,
-            contents=contents,
-            config=config,
-        )
+        async with ai_concurrency_slot(self._settings.ai_max_concurrency):
+            return await client.aio.models.generate_content(
+                model=self._settings.vertex_model,
+                contents=contents,
+                config=config,
+            )

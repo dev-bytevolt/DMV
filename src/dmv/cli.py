@@ -6,14 +6,20 @@ import logging
 import sys
 from pathlib import Path
 
-from dmv.categorization import CategorizationService, FileProcessingResult, RunSummary
+from dmv.categorization import (
+    CategorizationService,
+    FileProcessingError,
+    FileProcessingResult,
+    RunSummary,
+    is_already_processed,
+)
 from dmv.config import Settings, load_settings
 from dmv.cost import estimate_cost
 from dmv.debug_exclusions import ExcludedDocument
-from dmv.extraction.service import ExtractionResult, ExtractionStats
+from dmv.extraction.service import ExtractionResult
 from dmv.logging_config import configure_logging, format_error
 from dmv.models.usage import ProcessingStats, TokenUsage
-from dmv.preprocess.service import PreprocessingResult, PreprocessingStats
+from dmv.preprocess.service import PreprocessingResult
 from dmv.validation import DocumentContiguityReport, PageCoverageReport
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional path to a .env file",
     )
     parser.add_argument(
+        "--skip-processed",
+        action="store_true",
+        help=(
+            "Skip PDFs that already have a completed artifacts/<name>/output.pdf "
+            "(process only inputs whose artifact folders are missing or incomplete)"
+        ),
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -46,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def print_results(summary: RunSummary, settings: Settings) -> int:
     exit_code = 0
+
+    if summary.skipped:
+        print(f"\nSkipped already processed ({len(summary.skipped)}):")
+        for path in summary.skipped:
+            print(f"  - {path.name}")
 
     for result in summary.results:
         print(f"\nFile: {result.source_pdf}")
@@ -86,8 +105,19 @@ def print_results(summary: RunSummary, settings: Settings) -> int:
         if not result.validation.is_valid:
             exit_code = 1
 
-    if len(summary.results) > 1:
+    if summary.failures:
+        exit_code = 1
+        print(f"\nFailed ({len(summary.failures)}):")
+        for failure in summary.failures:
+            print(f"  - {failure.source_pdf.name}: {failure.error}")
+
+    if len(summary.results) > 1 or summary.failures or summary.skipped:
         print("\nRun totals:")
+        print(
+            f"  Succeeded: {len(summary.results)}, "
+            f"failed: {len(summary.failures)}, "
+            f"skipped: {len(summary.skipped)}"
+        )
         print_processing_stats(
             ProcessingStats(
                 elapsed_seconds=summary.total_elapsed_seconds,
@@ -248,10 +278,30 @@ def _format_cost(stats: ProcessingStats, settings: Settings) -> str:
     )
 
 
-async def run_async(pdf_files: list[Path], env_file: Path | None) -> int:
+async def run_async(
+    pdf_files: list[Path],
+    env_file: Path | None,
+    *,
+    skip_processed: bool = False,
+) -> int:
     settings = load_settings(env_file)
+    if skip_processed:
+        pending = [
+            path
+            for path in pdf_files
+            if not is_already_processed(path, settings.artifacts_dir)
+        ]
+        if not pending:
+            print(
+                f"All {len(pdf_files)} input file(s) already processed "
+                f"under {settings.artifacts_dir}/ — nothing to do."
+            )
+            return 0
     service = CategorizationService(settings)
-    summary = await service.process_files(pdf_files)
+    summary = await service.process_files(
+        pdf_files,
+        skip_processed=skip_processed,
+    )
     return print_results(summary, settings)
 
 
@@ -261,10 +311,25 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(verbose=args.verbose)
 
     try:
-        return asyncio.run(run_async(args.pdf_files, args.env_file))
+        return asyncio.run(
+            run_async(
+                args.pdf_files,
+                args.env_file,
+                skip_processed=args.skip_processed,
+            )
+        )
     except KeyboardInterrupt:
         logger.error("Interrupted")
         return 130
+    except FileProcessingError as exc:
+        logger.error(
+            "Processing failed for %s: %s",
+            exc.source_pdf.name,
+            format_error(exc.cause),
+        )
+        if args.verbose:
+            logger.exception("Full traceback:")
+        return 1
     except Exception as exc:
         logger.error("Processing failed: %s", format_error(exc))
         if args.verbose:

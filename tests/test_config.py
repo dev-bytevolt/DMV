@@ -34,6 +34,8 @@ def test_load_settings_from_env(monkeypatch, tmp_path: Path) -> None:
         openai_cached_input_price_per_million=None,
         preprocess_dpi=200,
         debug_mode=False,
+        ai_max_concurrency=2,
+        vertex_http_timeout_ms=600_000,
     )
 
 
@@ -75,6 +77,8 @@ def test_load_settings_defaults(monkeypatch, tmp_path: Path) -> None:
     assert settings.vertex_model == "gemini-3.1-pro-preview"
     assert settings.vertex_service_account_json is None
     assert settings.active_model == "gpt-4o"
+    assert settings.ai_max_concurrency == 2
+    assert settings.vertex_http_timeout_ms == 600_000
 
 
 def test_load_settings_vertex(tmp_path: Path) -> None:

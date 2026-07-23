@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
@@ -11,6 +12,31 @@ from dmv.logging_config import format_error
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+def _is_transient_disconnect(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    if name in {
+        "RemoteProtocolError",
+        "ConnectError",
+        "ReadTimeout",
+        "WriteTimeout",
+        "ConnectTimeout",
+        "PoolTimeout",
+    }:
+        return True
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "server disconnected",
+            "connection reset",
+            "temporarily unavailable",
+            "unavailable",
+            "timed out",
+            "timeout",
+        )
+    )
 
 
 async def retry_async(
@@ -35,7 +61,10 @@ async def retry_async(
                     format_error(exc),
                 )
                 break
-            delay = base_delay_seconds * (2**attempt)
+            # Connection drops benefit from longer backoff + jitter.
+            multiplier = 3 if _is_transient_disconnect(exc) else 1
+            delay = base_delay_seconds * (2**attempt) * multiplier
+            delay += random.uniform(0.0, min(delay * 0.25, 5.0))
             logger.warning(
                 "%s failed on attempt %s/%s: %s. Retrying in %.1fs.",
                 operation_name,
