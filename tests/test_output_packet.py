@@ -132,7 +132,52 @@ def test_ba49_and_ownership_mappings() -> None:
     ] == "36"
 
 
-def test_uta_vehicle_year_make_use_year2_make2() -> None:
+def test_uta_defaults_axles_to_two() -> None:
+    fields = build_uta_fields({"vehicle_vin": {"value": "ABC", "confidence": 1.0}})
+    assert fields["No of Axles"] == "2"
+
+
+def test_ba49_puts_driver_on_owner_row_without_lessee() -> None:
+    data = {
+        "vehicle_vin": {"value": "VIN123", "confidence": 1.0},
+        "owner": {"full_name": {"value": "WALTER A JAMROS", "confidence": 1.0}},
+        "driver": {
+            "license_number": {"value": "J0373 77661 04554", "confidence": 1.0},
+            "gender": {"value": "M", "confidence": 1.0},
+            "eyes_color": {"value": "BLU", "confidence": 1.0},
+            "dob": {"value": "04-02-1955", "confidence": 1.0},
+            "ssn": {"value": "148-50-4320", "confidence": 1.0},
+        },
+    }
+    ba49 = build_ba49_fields(data)
+    assert ba49["Text24.0.0"] == "J0373"
+    assert ba49["Gender.0"] == "M"
+    assert ba49["Text29.0.0"] == "148"
+    assert "Text24.0.2" not in ba49
+    assert "Name/Lessee" not in ba49
+
+
+def test_ba49_lease_puts_corpcode_on_owner_and_driver_on_lessee() -> None:
+    data = {
+        "vehicle_vin": {"value": "VIN123", "confidence": 1.0},
+        "owner": {
+            "full_name": {"value": "TOYOTA LEASE TRUST", "confidence": 1.0},
+            "license_or_entity_id": {"value": "89550 59097 78420", "confidence": 1.0},
+        },
+        "lessee": {"name": {"value": "ANGELA HAJAL", "confidence": 1.0}},
+        "driver": {
+            "license_number": {"value": "H0203 04300 62662", "confidence": 1.0},
+            "gender": {"value": "F", "confidence": 1.0},
+            "ssn": {"value": "157-15-4821", "confidence": 1.0},
+        },
+    }
+    ba49 = build_ba49_fields(data)
+    assert ba49["Text24.0.0"] == "89550"
+    assert ba49["Text24.0.2"] == "H0203"
+    assert ba49["Gender.2"] == "F"
+    assert ba49["Text29.0.2"] == "157"
+    assert "Gender.0" not in ba49
+
     fields = build_uta_fields(
         {
             "vehicle_year": {"value": "2026", "confidence": 1.0},

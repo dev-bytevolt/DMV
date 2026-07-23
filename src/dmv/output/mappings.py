@@ -103,6 +103,11 @@ def build_uta_fields(data: dict[str, Any]) -> dict[str, str]:
         if body.upper().startswith("WAGON") and "4" in body.upper():
             body = "WAGON 4"
     _put(fields, "Body Type", body)
+    axles = first_value(data, "vehicle_axles", "number_of_axles")
+    # Passenger cars/SUVs/wagons on these packets are 2-axle; samples hand-correct NA→2.
+    if not axles:
+        axles = "2"
+    _put(fields, "No of Axles", axles)
     _put(
         fields,
         "Odometer Reading at time of purchase",
@@ -371,6 +376,7 @@ def build_ba49_fields(data: dict[str, Any]) -> dict[str, str]:
     )
     _put(fields, "Name/Owner", owner_name)
     lessee_raw = first_value(data, "lessee.name", "lessee_name")
+    has_lessee = bool(lessee_raw)
     # Keep natural "FIRST LAST" order from source docs (BA-49 samples vary).
     _put(fields, "Name/Lessee", lessee_raw)
     _put(
@@ -384,17 +390,18 @@ def build_ba49_fields(data: dict[str, Any]) -> dict[str, str]:
             "driver_address_street",
         ),
     )
-    _put(
-        fields,
-        "Street Address_2",
-        first_value(
-            data,
-            "lessee.address.street",
-            "lessee_address_street",
-            "driver.address.street",
-            "driver_address_street",
-        ),
-    )
+    if has_lessee:
+        _put(
+            fields,
+            "Street Address_2",
+            first_value(
+                data,
+                "lessee.address.street",
+                "lessee_address_street",
+                "driver.address.street",
+                "driver_address_street",
+            ),
+        )
     _put(
         fields,
         "City",
@@ -429,45 +436,46 @@ def build_ba49_fields(data: dict[str, Any]) -> dict[str, str]:
         ),
     )
     _put(fields, "County", first_value(data, "owner.county", "owner_county"))
-    _put(
-        fields,
-        "City_2",
-        first_value(
-            data,
-            "lessee.address.city",
-            "lessee_address_city",
-            "driver.address.city",
-            "driver_address_city",
-        ),
-    )
-    _put(
-        fields,
-        "State_2",
-        first_value(
-            data,
-            "lessee.address.state",
-            "lessee_address_state",
-            "driver.address.state",
-            "driver_address_state",
-        ),
-    )
-    _put(
-        fields,
-        "Zip_2",
-        first_value(
-            data,
-            "lessee.address.zip",
-            "lessee_address_zip",
-            "driver.address.zip",
-            "driver_address_zip",
-        ),
-    )
-    _put(
-        fields,
-        "Date Lease Signed",
-        first_value(data, "lease_signed_date", "lease_start_date"),
-    )
-    _put(fields, "Term (Months)", first_value(data, "lease_term_months"))
+    if has_lessee:
+        _put(
+            fields,
+            "City_2",
+            first_value(
+                data,
+                "lessee.address.city",
+                "lessee_address_city",
+                "driver.address.city",
+                "driver_address_city",
+            ),
+        )
+        _put(
+            fields,
+            "State_2",
+            first_value(
+                data,
+                "lessee.address.state",
+                "lessee_address_state",
+                "driver.address.state",
+                "driver_address_state",
+            ),
+        )
+        _put(
+            fields,
+            "Zip_2",
+            first_value(
+                data,
+                "lessee.address.zip",
+                "lessee_address_zip",
+                "driver.address.zip",
+                "driver_address_zip",
+            ),
+        )
+        _put(
+            fields,
+            "Date Lease Signed",
+            first_value(data, "lease_signed_date", "lease_start_date"),
+        )
+        _put(fields, "Term (Months)", first_value(data, "lease_term_months"))
     _put(
         fields,
         "Name/Co-Owner",
@@ -481,6 +489,16 @@ def build_ba49_fields(data: dict[str, Any]) -> dict[str, str]:
     _put(fields, "Date Lease Cancelled", first_value(data, "lease_cancelled_date"))
     _put(fields, "Insurance Company", first_value(data, "insurance_company"))
     _put(fields, "Policy Number", first_value(data, "insurance_policy_number"))
+    _put(
+        fields,
+        "Federal Tax Identification Number",
+        first_value(
+            data,
+            "federal_tax_id",
+            "federal_tax_identification_number",
+            "owner.federal_tax_id",
+        ),
+    )
 
     # Registration type + default No answers used on filled samples.
     fields["Check Box23.1"] = "/Initial"
@@ -494,26 +512,40 @@ def build_ba49_fields(data: dict[str, Any]) -> dict[str, str]:
         format_odometer_reading(first_value(data, "odometer_reading")),
     )
 
-    # Owner row: corpcode / entity id when the titled owner is an entity.
-    _put_ba49_person_row(
-        fields,
-        row=0,
-        license_number=first_value(
-            data, "owner.license_or_entity_id", "owner_license_or_entity_id"
-        ),
+    driver_license = first_value(data, "driver.license_number", "driver_license_number")
+    driver_gender = first_value(data, "driver.gender", "driver_gender")
+    driver_eyes = first_value(data, "driver.eyes_color", "driver_eyes_color")
+    driver_dob = first_value(data, "driver.dob", "driver_dob")
+    driver_ssn = first_value(
+        data, "driver.ssn", "driver_ssn", "lessee.ssn", "owner_social_security_number"
     )
-    # Lessee / driver credential row.
-    _put_ba49_person_row(
-        fields,
-        row=2,
-        license_number=first_value(
-            data, "driver.license_number", "driver_license_number"
-        ),
-        gender=first_value(data, "driver.gender", "driver_gender"),
-        eye_color=first_value(data, "driver.eyes_color", "driver_eyes_color"),
-        dob=first_value(data, "driver.dob", "driver_dob"),
-        ssn=first_value(data, "driver.ssn", "driver_ssn", "lessee.ssn"),
+    owner_id = first_value(
+        data, "owner.license_or_entity_id", "owner_license_or_entity_id"
     )
+
+    if has_lessee:
+        # Lease: owner row = trust corpcode; lessee row = driver credentials.
+        _put_ba49_person_row(fields, row=0, license_number=owner_id)
+        _put_ba49_person_row(
+            fields,
+            row=2,
+            license_number=driver_license,
+            gender=driver_gender,
+            eye_color=driver_eyes,
+            dob=driver_dob,
+            ssn=driver_ssn,
+        )
+    else:
+        # Retail / titled individual: credentials go on the owner's row.
+        _put_ba49_person_row(
+            fields,
+            row=0,
+            license_number=owner_id or driver_license,
+            gender=driver_gender,
+            eye_color=driver_eyes,
+            dob=driver_dob,
+            ssn=driver_ssn,
+        )
     return fields
 
 

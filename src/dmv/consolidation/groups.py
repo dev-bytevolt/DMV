@@ -115,6 +115,7 @@ ENTITY_GROUPS: tuple[EntityGroupSpec, ...] = (
             ("driver_gender", "gender"),
             ("driver_height", "height"),
             ("driver_eyes_color", "eyes_color"),
+            ("driver_ssn", "ssn"),
             ("driver_license_issue_date", "license_issue_date"),
             ("driver_license_expiration_date", "license_expiration_date"),
             ("driver_license_class", "license_class"),
